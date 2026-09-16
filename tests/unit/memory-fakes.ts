@@ -17,7 +17,9 @@ import type { IngestionDeps } from "@/server/services/ingestion";
  * be exercised — and replayed — with no database and no network.
  */
 export type MemoryStore = {
-  observations: ObservationRecord[];
+  /** The real repo persists `resolution`; the fake must too, or tests
+   *  cannot assert what the deterministic layer decided. */
+  observations: Array<ObservationRecord & { resolution?: unknown }>;
   entities: EntityRecord[];
   relationships: RelationshipRecord[];
   facts: FactRecord[];
@@ -116,10 +118,13 @@ export function fakeMemoryRepos(store: MemoryStore) {
       store.observations.push(record);
       return record;
     },
-    async markProcessed(observationId) {
+    async markProcessed(observationId, resolution) {
       store.calls.push("observations.markProcessed");
       const row = store.observations.find((o) => o.id === observationId);
-      if (row) row.processedAt = new Date().toISOString();
+      if (row) {
+        row.processedAt = new Date().toISOString();
+        row.resolution = resolution;
+      }
     },
   };
 

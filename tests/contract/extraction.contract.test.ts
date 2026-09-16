@@ -47,6 +47,56 @@ describe.skipIf(!hasKey)("extraction contract against the live model", () => {
     expect(failures).toEqual([]);
   });
 
+  // The live regression: possessive self-reference must resolve to null, not
+  // to a pseudo-entity standing in for the person writing.
+  it.each([
+    ["My son John visited yesterday with his dog Simba.", "son", "John"],
+    ["My daughter Sarah called me.", "daughter", "Sarah"],
+    ["My friend Alice came round.", "friend", "Alice"],
+  ])("maps the possessive in %j to fromMention: null", async (utterance, kind, target) => {
+    const { createOpenAiExtraction } = await import("@/server/adapters/openai/extraction");
+    const provider = createOpenAiExtraction();
+
+    const response = await provider.extract({
+      promptRef: extractionPromptV1.ref,
+      system: extractionPromptV1.system,
+      user: utterance,
+      schemaName: extractionPromptV1.schemaName,
+      jsonSchema: EXTRACTION_V1_JSON_SCHEMA,
+    });
+
+    const parsed = ExtractionV1Schema.parse(response.raw);
+    const edge = parsed.relationships.find((r) => r.kind === kind);
+    expect(edge, `no "${kind}" relationship extracted`).toBeDefined();
+    expect(edge!.fromMention).toBeNull();
+    expect(edge!.toMention.toLowerCase()).toContain(target.toLowerCase());
+
+    // No role phrase or pronoun is ever emitted as an entity for the speaker.
+    for (const entity of parsed.entities) {
+      expect(entity.canonicalName.toLowerCase()).not.toMatch(/^(me|i|myself)$/);
+      expect(entity.canonicalName.toLowerCase()).not.toMatch(/^my /);
+    }
+  });
+
+  it("keeps a third party as the source of their own possessive", async () => {
+    const { createOpenAiExtraction } = await import("@/server/adapters/openai/extraction");
+    const provider = createOpenAiExtraction();
+
+    const response = await provider.extract({
+      promptRef: extractionPromptV1.ref,
+      system: extractionPromptV1.system,
+      user: "John brought his dog Simba.",
+      schemaName: extractionPromptV1.schemaName,
+      jsonSchema: EXTRACTION_V1_JSON_SCHEMA,
+    });
+
+    const parsed = ExtractionV1Schema.parse(response.raw);
+    const pet = parsed.relationships.find((r) => r.kind === "pet");
+    expect(pet, "no pet relationship extracted").toBeDefined();
+    expect(pet!.fromMention?.toLowerCase()).toContain("john");
+    expect(pet!.kind).not.toBe("dog");
+  });
+
   it("never invents an absolute date the person did not state", async () => {
     const { createOpenAiExtraction } = await import("@/server/adapters/openai/extraction");
     const provider = createOpenAiExtraction();

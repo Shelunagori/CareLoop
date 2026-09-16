@@ -12,6 +12,7 @@ import { computeSalience } from "@/core/memory/salience";
 import { resolveTemporal } from "@/core/memory/temporal";
 import { episodeEmbeddingInput } from "@/core/memory/embedding-input";
 import { detectMentionedNames, renderEntityCard } from "@/core/memory/present";
+import { isSelfReference, normalizeSelfEndpoint } from "@/core/memory/self-reference";
 
 const john: KnownEntity = {
   id: "e-john",
@@ -295,5 +296,35 @@ describe("presentation", () => {
     const a = episodeEmbeddingInput({ summary: "John visited", participantNames: ["John", "Simba"] });
     const b = episodeEmbeddingInput({ summary: "John visited", participantNames: ["Simba", "John"] });
     expect(a).toBe(b);
+  });
+});
+
+
+describe("self-reference guard", () => {
+  it("recognises bare first-person pronouns, case and spacing insensitively", () => {
+    for (const token of ["I", "i", "me", "Me", " myself ", "MYSELF"]) {
+      expect(isSelfReference(token)).toBe(true);
+    }
+  });
+
+  it("does NOT treat a possessive role phrase as the speaker", () => {
+    // "my son" refers to John, not to the person writing. Folding it into the
+    // user would attach the edge to the wrong end — worse than dropping it.
+    for (const phrase of ["my son", "my daughter", "my friend", "my neighbour", "my dog"]) {
+      expect(isSelfReference(phrase)).toBe(false);
+    }
+  });
+
+  it("does not swallow real names that merely contain a pronoun", () => {
+    for (const name of ["Mike", "Imogen", "Mel", "Ivy", "Mary"]) {
+      expect(isSelfReference(name)).toBe(false);
+    }
+  });
+
+  it("maps a self endpoint to null and leaves everything else alone", () => {
+    expect(normalizeSelfEndpoint("me")).toBeNull();
+    expect(normalizeSelfEndpoint(null)).toBeNull();
+    expect(normalizeSelfEndpoint("John")).toBe("John");
+    expect(normalizeSelfEndpoint("my son")).toBe("my son");
   });
 });

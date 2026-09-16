@@ -25,6 +25,7 @@ import {
 } from "@/core/memory/evidence";
 import { normalizeFactKey, normalizeName, normalizeSummary } from "@/core/memory/normalize";
 import { resolveEntityMention, type KnownEntity, type KnownRelationship } from "@/core/memory/resolve-entity";
+import { isSelfReference, normalizeSelfEndpoint } from "@/core/memory/self-reference";
 import { computeSalience } from "@/core/memory/salience";
 import { resolveTemporal } from "@/core/memory/temporal";
 
@@ -266,6 +267,15 @@ async function commitMemory(
   );
 
   for (const claim of claims) {
+    // The person writing is not an entity (see core/memory/self-reference).
+    if (isSelfReference(claim.canonicalName) || isSelfReference(claim.mention)) {
+      resolution.mentions[claim.mention] = { kind: "skipped", reason: "self_reference" };
+      resolution.skipped.push(claim.mention);
+      unresolvable.add(claim.mention);
+      unresolvable.add(claim.canonicalName);
+      continue;
+    }
+
     const resolved = resolveEntityMention({
       mention: claim.canonicalName,
       type: claim.type,
@@ -373,7 +383,16 @@ async function commitMemory(
   // --- relationships --------------------------------------------------------
   for (const claim of ctx.extracted.relationships) {
     if (claim.confidence < ingestionConfig.minClaimConfidence) continue;
-    const from = lookup(claim.fromMention);
+
+    // An edge pointing AT the person writing has nowhere to land:
+    // to_entity_id is NOT NULL and the user has no entity row. Skip it rather
+    // than inventing one.
+    if (isSelfReference(claim.toMention)) {
+      resolution.skipped.push(`relationship:${claim.kind}:self_target`);
+      continue;
+    }
+
+    const from = lookup(normalizeSelfEndpoint(claim.fromMention));
     const to = lookup(claim.toMention);
     if (from === undefined || to === undefined || to === null) {
       resolution.skipped.push(`relationship:${claim.kind}:${claim.toMention}`);
@@ -427,7 +446,7 @@ async function commitMemory(
   // --- facts ----------------------------------------------------------------
   for (const claim of ctx.extracted.facts) {
     if (claim.confidence < ingestionConfig.minClaimConfidence) continue;
-    const subject = lookup(claim.subjectMention);
+    const subject = lookup(normalizeSelfEndpoint(claim.subjectMention));
     if (subject === undefined) {
       resolution.skipped.push(`fact:${claim.key}`);
       continue;
