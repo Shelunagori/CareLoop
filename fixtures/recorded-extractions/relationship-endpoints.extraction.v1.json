@@ -7,21 +7,85 @@
       "createdAt": "2026-09-16T10:00:00.000Z",
       "extraction": {
         "entities": [
-          { "mention": "my son John", "canonicalName": "John", "type": "person", "subtype": null, "confidence": 0.96, "sourceSpan": "My son John" },
-          { "mention": "his dog Simba", "canonicalName": "Simba", "type": "pet", "subtype": "dog", "confidence": 0.94, "sourceSpan": "his dog Simba" }
+          {
+            "mention": "my son John",
+            "canonicalName": "John",
+            "type": "person",
+            "subtype": null,
+            "confidence": 0.96,
+            "sourceSpan": "My son John"
+          },
+          {
+            "mention": "his dog Simba",
+            "canonicalName": "Simba",
+            "type": "pet",
+            "subtype": "dog",
+            "confidence": 0.94,
+            "sourceSpan": "his dog Simba"
+          }
         ],
         "relationships": [
-          { "fromMention": null, "toMention": "my son John", "kind": "son", "explicitlyConfirmed": false, "confidence": 0.95, "sourceSpan": "My son John" },
-          { "fromMention": "my son John", "toMention": "his dog Simba", "kind": "pet", "explicitlyConfirmed": false, "confidence": 0.92, "sourceSpan": "his dog Simba" }
+          {
+            "fromMention": null,
+            "toMention": "my son John",
+            "kind": "son",
+            "explicitlyConfirmed": false,
+            "confidence": 0.95,
+            "sourceSpan": "My son John"
+          },
+          {
+            "fromMention": "my son John",
+            "toMention": "his dog Simba",
+            "kind": "pet",
+            "explicitlyConfirmed": false,
+            "confidence": 0.92,
+            "sourceSpan": "his dog Simba"
+          }
         ],
         "facts": [],
         "episodes": [
-          { "summary": "John visited with his dog Simba.", "participantMentions": ["my son John", "his dog Simba"], "temporal": { "expression": "yesterday", "absoluteDate": null }, "emotionWords": [], "confidence": 0.93, "sourceSpan": "visited yesterday" }
-        ]
+          {
+            "summary": "John visited with his dog Simba.",
+            "participantMentions": [
+              "my son John",
+              "his dog Simba"
+            ],
+            "temporal": {
+              "expression": "yesterday",
+              "absoluteDate": null
+            },
+            "emotionWords": [],
+            "confidence": 0.93,
+            "sourceSpan": "visited yesterday"
+          }
+        ],
+        "interactions": []
       },
       "expect": {
-        "entities": [["John", "person", null], ["Simba", "pet", "dog"]],
-        "relationships": [[null, "John", "son"], ["John", "Simba", "pet"]]
+        "entities": [
+          [
+            "John",
+            "person",
+            null
+          ],
+          [
+            "Simba",
+            "pet",
+            "dog"
+          ]
+        ],
+        "relationships": [
+          [
+            null,
+            "John",
+            "son"
+          ],
+          [
+            "John",
+            "Simba",
+            "pet"
+          ]
+        ]
       }
     },
     {
@@ -30,19 +94,58 @@
       "createdAt": "2026-09-17T11:00:00.000Z",
       "extraction": {
         "entities": [
-          { "mention": "my daughter Sarah", "canonicalName": "Sarah", "type": "person", "subtype": null, "confidence": 0.95, "sourceSpan": "My daughter Sarah" }
+          {
+            "mention": "my daughter Sarah",
+            "canonicalName": "Sarah",
+            "type": "person",
+            "subtype": null,
+            "confidence": 0.95,
+            "sourceSpan": "My daughter Sarah"
+          }
         ],
         "relationships": [
-          { "fromMention": null, "toMention": "my daughter Sarah", "kind": "daughter", "explicitlyConfirmed": false, "confidence": 0.94, "sourceSpan": "My daughter Sarah" }
+          {
+            "fromMention": null,
+            "toMention": "my daughter Sarah",
+            "kind": "daughter",
+            "explicitlyConfirmed": false,
+            "confidence": 0.94,
+            "sourceSpan": "My daughter Sarah"
+          }
         ],
         "facts": [],
         "episodes": [
-          { "summary": "Sarah called.", "participantMentions": ["my daughter Sarah"], "temporal": { "expression": null, "absoluteDate": null }, "emotionWords": [], "confidence": 0.88, "sourceSpan": "called me" }
-        ]
+          {
+            "summary": "Sarah called.",
+            "participantMentions": [
+              "my daughter Sarah"
+            ],
+            "temporal": {
+              "expression": null,
+              "absoluteDate": null
+            },
+            "emotionWords": [],
+            "confidence": 0.88,
+            "sourceSpan": "called me"
+          }
+        ],
+        "interactions": []
       },
       "expect": {
-        "entities": [["Sarah", "person", null]],
-        "relationships": [[null, "Sarah", "daughter"]]
+        "entities": [
+          [
+            "Sarah",
+            "person",
+            null
+          ]
+        ],
+        "relationships": [
+          [
+            null,
+            "Sarah",
+            "daughter"
+          ]
+        ]
       }
     },
     {
@@ -51,19 +154,58 @@
       "createdAt": "2026-09-18T12:00:00.000Z",
       "extraction": {
         "entities": [
-          { "mention": "my friend Alice", "canonicalName": "Alice", "type": "person", "subtype": null, "confidence": 0.94, "sourceSpan": "My friend Alice" }
+          {
+            "mention": "my friend Alice",
+            "canonicalName": "Alice",
+            "type": "person",
+            "subtype": null,
+            "confidence": 0.94,
+            "sourceSpan": "My friend Alice"
+          }
         ],
         "relationships": [
-          { "fromMention": null, "toMention": "my friend Alice", "kind": "friend", "explicitlyConfirmed": false, "confidence": 0.93, "sourceSpan": "My friend Alice" }
+          {
+            "fromMention": null,
+            "toMention": "my friend Alice",
+            "kind": "friend",
+            "explicitlyConfirmed": false,
+            "confidence": 0.93,
+            "sourceSpan": "My friend Alice"
+          }
         ],
         "facts": [],
         "episodes": [
-          { "summary": "Alice came round.", "participantMentions": ["my friend Alice"], "temporal": { "expression": null, "absoluteDate": null }, "emotionWords": [], "confidence": 0.87, "sourceSpan": "came round" }
-        ]
+          {
+            "summary": "Alice came round.",
+            "participantMentions": [
+              "my friend Alice"
+            ],
+            "temporal": {
+              "expression": null,
+              "absoluteDate": null
+            },
+            "emotionWords": [],
+            "confidence": 0.87,
+            "sourceSpan": "came round"
+          }
+        ],
+        "interactions": []
       },
       "expect": {
-        "entities": [["Alice", "person", null]],
-        "relationships": [[null, "Alice", "friend"]]
+        "entities": [
+          [
+            "Alice",
+            "person",
+            null
+          ]
+        ],
+        "relationships": [
+          [
+            null,
+            "Alice",
+            "friend"
+          ]
+        ]
       }
     },
     {
@@ -72,20 +214,72 @@
       "createdAt": "2026-09-19T13:00:00.000Z",
       "extraction": {
         "entities": [
-          { "mention": "John", "canonicalName": "John", "type": "person", "subtype": null, "confidence": 0.95, "sourceSpan": "John" },
-          { "mention": "his dog Simba", "canonicalName": "Simba", "type": "pet", "subtype": "dog", "confidence": 0.93, "sourceSpan": "his dog Simba" }
+          {
+            "mention": "John",
+            "canonicalName": "John",
+            "type": "person",
+            "subtype": null,
+            "confidence": 0.95,
+            "sourceSpan": "John"
+          },
+          {
+            "mention": "his dog Simba",
+            "canonicalName": "Simba",
+            "type": "pet",
+            "subtype": "dog",
+            "confidence": 0.93,
+            "sourceSpan": "his dog Simba"
+          }
         ],
         "relationships": [
-          { "fromMention": "John", "toMention": "his dog Simba", "kind": "pet", "explicitlyConfirmed": false, "confidence": 0.92, "sourceSpan": "his dog Simba" }
+          {
+            "fromMention": "John",
+            "toMention": "his dog Simba",
+            "kind": "pet",
+            "explicitlyConfirmed": false,
+            "confidence": 0.92,
+            "sourceSpan": "his dog Simba"
+          }
         ],
         "facts": [],
         "episodes": [
-          { "summary": "John brought his dog Simba.", "participantMentions": ["John", "his dog Simba"], "temporal": { "expression": null, "absoluteDate": null }, "emotionWords": [], "confidence": 0.9, "sourceSpan": "brought his dog Simba" }
-        ]
+          {
+            "summary": "John brought his dog Simba.",
+            "participantMentions": [
+              "John",
+              "his dog Simba"
+            ],
+            "temporal": {
+              "expression": null,
+              "absoluteDate": null
+            },
+            "emotionWords": [],
+            "confidence": 0.9,
+            "sourceSpan": "brought his dog Simba"
+          }
+        ],
+        "interactions": []
       },
       "expect": {
-        "entities": [["John", "person", null], ["Simba", "pet", "dog"]],
-        "relationships": [["John", "Simba", "pet"]]
+        "entities": [
+          [
+            "John",
+            "person",
+            null
+          ],
+          [
+            "Simba",
+            "pet",
+            "dog"
+          ]
+        ],
+        "relationships": [
+          [
+            "John",
+            "Simba",
+            "pet"
+          ]
+        ]
       }
     }
   ]

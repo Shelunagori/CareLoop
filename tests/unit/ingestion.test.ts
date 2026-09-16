@@ -68,6 +68,7 @@ const JOHN_AND_SIMBA: ExtractionV1 = {
       sourceSpan: "visited yesterday",
     },
   ],
+  interactions: [],
 };
 
 function job(store: MemoryStore, key: string, userMessageId: string, conversationId: string) {
@@ -167,6 +168,7 @@ describe("3-5. entity resolution", () => {
       relationships: [],
       facts: [],
       episodes: [],
+      interactions: [],
     };
 
     await processIngestJob(
@@ -196,6 +198,7 @@ describe("3-5. entity resolution", () => {
       ],
       facts: [],
       episodes: [],
+      interactions: [],
     };
 
     await processIngestJob(

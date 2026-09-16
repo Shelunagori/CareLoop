@@ -60,6 +60,33 @@ export const TemporalClaimSchema = z.object({
   absoluteDate: z.string().nullable(),
 });
 
+/**
+ * Interaction claims (M3).
+ *
+ * The smallest extension that lets deterministic code tell a visit from a call
+ * from an absence. Episodes are narrative; these are the countable social facts
+ * a baseline is computed from, and they need a type and a polarity that no
+ * amount of re-reading a summary can reliably recover.
+ *
+ * The model still decides nothing: it reports what kind of contact the person
+ * described and how sure the sentence is. Whether a row exists, when it
+ * happened, and what it means for a rhythm are all decided downstream.
+ */
+export const InteractionEventTypeSchema = z.enum(["visit", "call"]);
+export const InteractionPolaritySchema = z.enum(["positive", "absence"]);
+
+export const InteractionClaimSchema = z.object({
+  /** Who the contact was with. Same mention vocabulary as everywhere else. */
+  participantMention: z.string().min(1),
+  eventType: InteractionEventTypeSchema,
+  /** "positive" = it happened. "absence" = they said it did NOT happen. */
+  polarity: InteractionPolaritySchema,
+  temporal: z.lazy(() => TemporalClaimSchema),
+  /** How clearly the message states this contact, 0 to 1. */
+  certainty: z.number().min(0).max(1),
+  sourceSpan: z.string(),
+});
+
 export const EpisodeClaimSchema = z.object({
   /** One sentence, third person, past tense. */
   summary: z.string().min(1),
@@ -71,24 +98,61 @@ export const EpisodeClaimSchema = z.object({
   sourceSpan: z.string(),
 });
 
-export const ExtractionV1Schema = z.object({
+const extractionShape = {
   entities: z.array(EntityMentionSchema),
   relationships: z.array(RelationshipClaimSchema),
   facts: z.array(FactClaimSchema),
   episodes: z.array(EpisodeClaimSchema),
+};
+
+/**
+ * STORED-OBSERVATION parser. Backward compatible on purpose.
+ *
+ * `interactions` was added in M3, so observations recorded before it must
+ * still parse on replay: they default to [] and yield no interaction events,
+ * which is honest because the model was never asked. That compatibility is why
+ * EXTRACTION_CONTRACT_VERSION is unchanged - bumping it would re-extract the
+ * whole corpus and create a second observation row per message for a field
+ * that is purely additive.
+ *
+ * Use this ONLY for payloads already in the database.
+ */
+export const ExtractionV1Schema = z.object({
+  ...extractionShape,
+  interactions: z.array(InteractionClaimSchema).default([]),
+});
+
+/**
+ * LIVE provider parser. Strict on purpose.
+ *
+ * A fresh response must carry `interactions` explicitly - an empty array when
+ * there was no contact, never a missing key. The provider is sent a strict
+ * JSON schema listing it as required, so a response without it means the
+ * provider did not honour the contract. Defaulting there would turn a broken
+ * extractor into a person whose visits quietly stop counting, which is exactly
+ * the kind of silent failure this layer exists to prevent.
+ */
+export const ExtractionV1LiveSchema = z.object({
+  ...extractionShape,
+  interactions: z.array(InteractionClaimSchema),
 });
 
 export type EntityMention = z.infer<typeof EntityMentionSchema>;
 export type RelationshipClaim = z.infer<typeof RelationshipClaimSchema>;
 export type FactClaim = z.infer<typeof FactClaimSchema>;
 export type EpisodeClaim = z.infer<typeof EpisodeClaimSchema>;
+export type InteractionClaim = z.infer<typeof InteractionClaimSchema>;
+export type InteractionEventType = z.infer<typeof InteractionEventTypeSchema>;
+export type InteractionPolarity = z.infer<typeof InteractionPolaritySchema>;
 export type ExtractionV1 = z.infer<typeof ExtractionV1Schema>;
+export type ExtractionV1Live = z.infer<typeof ExtractionV1LiveSchema>;
 
 export const EMPTY_EXTRACTION: ExtractionV1 = {
   entities: [],
   relationships: [],
   facts: [],
   episodes: [],
+  interactions: [],
 };
 
 const nullableString = { type: ["string", "null"] as const };
@@ -101,7 +165,7 @@ const nullableString = { type: ["string", "null"] as const };
 export const EXTRACTION_V1_JSON_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["entities", "relationships", "facts", "episodes"],
+  required: ["entities", "relationships", "facts", "episodes", "interactions"],
   properties: {
     entities: {
       type: "array",
@@ -161,6 +225,37 @@ export const EXTRACTION_V1_JSON_SCHEMA = {
           value: { type: "string" },
           explicitlyConfirmed: { type: "boolean" },
           confidence: { type: "number" },
+          sourceSpan: { type: "string" },
+        },
+      },
+    },
+    interactions: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: [
+          "participantMention",
+          "eventType",
+          "polarity",
+          "temporal",
+          "certainty",
+          "sourceSpan",
+        ],
+        properties: {
+          participantMention: { type: "string" },
+          eventType: { type: "string", enum: ["visit", "call"] },
+          polarity: { type: "string", enum: ["positive", "absence"] },
+          temporal: {
+            type: "object",
+            additionalProperties: false,
+            required: ["expression", "absoluteDate"],
+            properties: {
+              expression: nullableString,
+              absoluteDate: nullableString,
+            },
+          },
+          certainty: { type: "number" },
           sourceSpan: { type: "string" },
         },
       },

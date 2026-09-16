@@ -131,9 +131,15 @@ describe("golden: two conversations about John and Simba", () => {
       .sort();
     expect(membersOfFirst).toEqual([john.id, simba.id].sort());
 
-    // --- scope: M3+ artefacts must not exist -------------------------------
-    expect(store).not.toHaveProperty("interactionEvents");
-    expect(store).not.toHaveProperty("baselines");
+    // --- scope ------------------------------------------------------------
+    // This fixture predates the interactions contract, so it carries no
+    // countable contact: memory is committed, the event spine stays empty.
+    // That is the honest outcome for an observation the model was never asked
+    // the question in.
+    expect(store.interactionEvents).toEqual([]);
+    expect(store.baselines.size).toBe(0);
+    // M4 artefacts do not exist at all.
     expect(store).not.toHaveProperty("signals");
+    expect(store).not.toHaveProperty("reconnectOpportunities");
   });
 });

@@ -16,6 +16,8 @@ export const extractionPromptV1 = {
    * Bumped when the prompt TEXT changes without changing the output contract.
    * r2 fixed possessive self-reference ("my son John" put the role phrase in
    * fromMention instead of null).
+   * r3 added the `interactions` array (M3): countable visit/call contact with
+   * an explicit polarity, which episode summaries could not reliably supply.
    *
    * `ref` is what lands in observations.prompt_id and the structured logs, so
    * a revision is traceable per observation. It is deliberately NOT the same
@@ -23,8 +25,8 @@ export const extractionPromptV1 = {
    * governs replay: bumping that would invalidate every stored observation and
    * re-extract the entire corpus, which a prompt wording fix does not warrant.
    */
-  revision: 2,
-  ref: "extraction.v1.r2",
+  revision: 3,
+  ref: "extraction.v1.r3",
   schemaName: "careloop_extraction_v1",
   system: [
     "You extract structured observations from one message an older adult sent",
@@ -78,6 +80,32 @@ export const extractionPromptV1 = {
     "key/value pairs: preferred_drink = tea, work_status = away. Do not store a",
     "whole sentence as a fact. Do not store one-off events as facts; those are",
     "episodes. Skip anything about health, mood, diagnosis or medication.",
+    "",
+    "interactions - countable social contact with one person or pet. This is",
+    "separate from episodes: an episode is the story, an interaction is the",
+    "contact itself, and there may be one, both or neither.",
+    "",
+    "  eventType is 'visit' (they were physically together) or 'call' (they",
+    "  spoke or messaged remotely). If it is neither, emit nothing.",
+    "  polarity is 'positive' when the contact HAPPENED, and 'absence' when the",
+    "  person says it did NOT happen ('I haven't seen John this week').",
+    "  temporal.expression is again the person's OWN phrase, copied verbatim.",
+    "  certainty is how clearly the message states this contact, 0 to 1. A",
+    "  plan or a hope is not a contact: 'John might pop round' is not an",
+    "  interaction at all.",
+    "",
+    "  'John visited yesterday.'",
+    "    -> {participantMention: 'John', eventType: 'visit',",
+    "        polarity: 'positive', temporal: {expression: 'yesterday'}}",
+    "  'John called this morning.'",
+    "    -> {participantMention: 'John', eventType: 'call',",
+    "        polarity: 'positive', temporal: {expression: 'this morning'}}",
+    "  'I have not seen John this week.'",
+    "    -> {participantMention: 'John', eventType: 'visit',",
+    "        polarity: 'absence', temporal: {expression: 'this week'}}",
+    "  'John rang and Simba was with him.' -> ONE interaction, with John.",
+    "    Simba was present but the person did not describe contact with Simba",
+    "    as a separate event.",
     "",
     "episodes - a specific thing that happened or was experienced. One sentence,",
     "third person, past tense. temporal.expression is the person's OWN phrase",

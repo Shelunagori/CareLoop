@@ -1,0 +1,254 @@
+{
+  "note": "M3 cadence series: five weekly visits, one two-call day, one absence assertion.",
+  "turns": [
+    {
+      "conversationId": "c0",
+      "messageId": "vm0",
+      "createdAt": "2026-08-12T10:00:00.000Z",
+      "utterance": "John came round today.",
+      "extraction": {
+        "entities": [
+          {
+            "mention": "John",
+            "canonicalName": "John",
+            "type": "person",
+            "subtype": null,
+            "confidence": 0.95,
+            "sourceSpan": "John"
+          }
+        ],
+        "relationships": [],
+        "facts": [],
+        "episodes": [],
+        "interactions": [
+          {
+            "participantMention": "John",
+            "eventType": "visit",
+            "polarity": "positive",
+            "temporal": {
+              "expression": "today",
+              "absoluteDate": null
+            },
+            "certainty": 0.92,
+            "sourceSpan": "John came round today"
+          }
+        ]
+      }
+    },
+    {
+      "conversationId": "c1",
+      "messageId": "vm1",
+      "createdAt": "2026-08-19T10:00:00.000Z",
+      "utterance": "John came round today.",
+      "extraction": {
+        "entities": [
+          {
+            "mention": "John",
+            "canonicalName": "John",
+            "type": "person",
+            "subtype": null,
+            "confidence": 0.95,
+            "sourceSpan": "John"
+          }
+        ],
+        "relationships": [],
+        "facts": [],
+        "episodes": [],
+        "interactions": [
+          {
+            "participantMention": "John",
+            "eventType": "visit",
+            "polarity": "positive",
+            "temporal": {
+              "expression": "today",
+              "absoluteDate": null
+            },
+            "certainty": 0.92,
+            "sourceSpan": "John came round today"
+          }
+        ]
+      }
+    },
+    {
+      "conversationId": "c2",
+      "messageId": "vm2",
+      "createdAt": "2026-08-26T10:00:00.000Z",
+      "utterance": "John came round today.",
+      "extraction": {
+        "entities": [
+          {
+            "mention": "John",
+            "canonicalName": "John",
+            "type": "person",
+            "subtype": null,
+            "confidence": 0.95,
+            "sourceSpan": "John"
+          }
+        ],
+        "relationships": [],
+        "facts": [],
+        "episodes": [],
+        "interactions": [
+          {
+            "participantMention": "John",
+            "eventType": "visit",
+            "polarity": "positive",
+            "temporal": {
+              "expression": "today",
+              "absoluteDate": null
+            },
+            "certainty": 0.92,
+            "sourceSpan": "John came round today"
+          }
+        ]
+      }
+    },
+    {
+      "conversationId": "c3",
+      "messageId": "vm3",
+      "createdAt": "2026-09-02T10:00:00.000Z",
+      "utterance": "John came round today.",
+      "extraction": {
+        "entities": [
+          {
+            "mention": "John",
+            "canonicalName": "John",
+            "type": "person",
+            "subtype": null,
+            "confidence": 0.95,
+            "sourceSpan": "John"
+          }
+        ],
+        "relationships": [],
+        "facts": [],
+        "episodes": [],
+        "interactions": [
+          {
+            "participantMention": "John",
+            "eventType": "visit",
+            "polarity": "positive",
+            "temporal": {
+              "expression": "today",
+              "absoluteDate": null
+            },
+            "certainty": 0.92,
+            "sourceSpan": "John came round today"
+          }
+        ]
+      }
+    },
+    {
+      "conversationId": "c4",
+      "messageId": "vm4",
+      "createdAt": "2026-09-09T10:00:00.000Z",
+      "utterance": "John came round today.",
+      "extraction": {
+        "entities": [
+          {
+            "mention": "John",
+            "canonicalName": "John",
+            "type": "person",
+            "subtype": null,
+            "confidence": 0.95,
+            "sourceSpan": "John"
+          }
+        ],
+        "relationships": [],
+        "facts": [],
+        "episodes": [],
+        "interactions": [
+          {
+            "participantMention": "John",
+            "eventType": "visit",
+            "polarity": "positive",
+            "temporal": {
+              "expression": "today",
+              "absoluteDate": null
+            },
+            "certainty": 0.92,
+            "sourceSpan": "John came round today"
+          }
+        ]
+      }
+    },
+    {
+      "conversationId": "c-calls",
+      "messageId": "cm1",
+      "createdAt": "2026-09-09T20:00:00.000Z",
+      "utterance": "John called this morning. He called again this evening.",
+      "extraction": {
+        "entities": [
+          {
+            "mention": "John",
+            "canonicalName": "John",
+            "type": "person",
+            "subtype": null,
+            "confidence": 0.95,
+            "sourceSpan": "John"
+          }
+        ],
+        "relationships": [],
+        "facts": [],
+        "episodes": [],
+        "interactions": [
+          {
+            "participantMention": "John",
+            "eventType": "call",
+            "polarity": "positive",
+            "temporal": {
+              "expression": "this morning",
+              "absoluteDate": null
+            },
+            "certainty": 0.9,
+            "sourceSpan": "John called this morning"
+          },
+          {
+            "participantMention": "John",
+            "eventType": "call",
+            "polarity": "positive",
+            "temporal": {
+              "expression": "this evening",
+              "absoluteDate": null
+            },
+            "certainty": 0.9,
+            "sourceSpan": "He called again this evening"
+          }
+        ]
+      }
+    },
+    {
+      "conversationId": "c-absence",
+      "messageId": "am1",
+      "createdAt": "2026-09-16T10:00:00.000Z",
+      "utterance": "I have not seen John this week.",
+      "extraction": {
+        "entities": [
+          {
+            "mention": "John",
+            "canonicalName": "John",
+            "type": "person",
+            "subtype": null,
+            "confidence": 0.95,
+            "sourceSpan": "John"
+          }
+        ],
+        "relationships": [],
+        "facts": [],
+        "episodes": [],
+        "interactions": [
+          {
+            "participantMention": "John",
+            "eventType": "visit",
+            "polarity": "absence",
+            "temporal": {
+              "expression": "this week",
+              "absoluteDate": null
+            },
+            "certainty": 0.93,
+            "sourceSpan": "I have not seen John this week"
+          }
+        ]
+      }
+    }
+  ]
+}

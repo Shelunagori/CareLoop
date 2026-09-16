@@ -6,6 +6,12 @@ import type { IngestJobPayload, JobRecord, JobsRepo } from "@/server/repositorie
 import type { MessagesRepo, StoredMessage } from "@/server/repositories/messages";
 import type { ObservationRecord, ObservationsRepo } from "@/server/repositories/observations";
 import type { RelationshipRecord, RelationshipsRepo } from "@/server/repositories/relationships";
+import type {
+  InteractionEventInput,
+  InteractionEventsRepo,
+} from "@/server/repositories/interaction-events";
+import type { BaselinesRepo } from "@/server/repositories/baselines";
+import type { BaselineDerivation } from "@/core/baseline/compute";
 import type { ExtractionV1 } from "@/core/memory/extraction-contract";
 import { fixedClock } from "@/server/adapters/clock";
 import type { IngestionDeps } from "@/server/services/ingestion";
@@ -27,6 +33,13 @@ export type MemoryStore = {
   episodeMembers: Array<{ episodeId: string; entityId: string }>;
   jobs: Array<{ id: string; key: string; payload: IngestJobPayload; attempts: number; completedAt: string | null; lastError: string | null }>;
   messages: StoredMessage[];
+  /** M3: the event spine. Fingerprint uniqueness mirrors the real index. */
+  interactionEvents: InteractionEventInput[];
+  /** M3: one baseline per "<entityId>:<eventType>", like the unique index. */
+  baselines: Map<
+    string,
+    BaselineDerivation & { entityId: string; eventType: string; computedAt: string }
+  >;
   calls: string[];
 };
 
@@ -40,6 +53,8 @@ export function createStore(messages: StoredMessage[] = []): MemoryStore {
     episodeMembers: [],
     jobs: [],
     messages: [...messages],
+    interactionEvents: [],
+    baselines: new Map(),
     calls: [],
   };
 }
@@ -315,7 +330,93 @@ export function fakeMemoryRepos(store: MemoryStore) {
     },
   };
 
-  return { observations, entities, relationships, facts, episodes, jobs, messages };
+  const interactionEvents: InteractionEventsRepo = {
+    async insertMany(events) {
+      for (const event of events) {
+        store.calls.push(`interactionEvents.insert:${event.eventType}:${event.polarity}`);
+        // UNIQUE(user_id, ingest_fingerprint) in the real schema: a replayed
+        // observation writes nothing new.
+        const duplicate = store.interactionEvents.some(
+          (existing) =>
+            existing.userId === event.userId &&
+            existing.ingestFingerprint === event.ingestFingerprint,
+        );
+        if (!duplicate) store.interactionEvents.push(event);
+      }
+    },
+    async listForSeries({ userId, entityId, eventType, sinceIso }) {
+      return store.interactionEvents
+        .filter(
+          (event) =>
+            event.userId === userId &&
+            event.entityId === entityId &&
+            event.eventType === eventType &&
+            event.occurredAt >= sinceIso,
+        )
+        .sort((a, b) => a.occurredAt.localeCompare(b.occurredAt))
+        .map((event, index) => ({
+          id: `ie-${index}`,
+          entityId: event.entityId,
+          eventType: event.eventType,
+          occurredAt: event.occurredAt,
+          occurredAtPrecision: event.occurredAtPrecision,
+          reportedAt: event.reportedAt,
+          certainty: event.certainty,
+          polarity: event.polarity,
+          windowStart: event.windowStart,
+          windowEnd: event.windowEnd,
+          ingestFingerprint: event.ingestFingerprint,
+        }));
+    },
+  };
+
+  const baselines: BaselinesRepo = {
+    async save({ entityId, eventType, baseline, computedAt }) {
+      store.calls.push(`baselines.save:${entityId}:${eventType}`);
+      // Ingestion always saves a freshly derived baseline, so the fake can
+      // keep the derivation detail the golden tests assert on.
+      store.baselines.set(`${entityId}:${eventType}`, {
+        ...(baseline as BaselineDerivation),
+        entityId,
+        eventType,
+        computedAt,
+      });
+    },
+    async find({ entityId, eventType }) {
+      const hit = store.baselines.get(`${entityId}:${eventType}`);
+      if (!hit) return null;
+      return {
+        id: `bl-${entityId}-${eventType}`,
+        entityId,
+        eventType: hit.eventType as "visit" | "call",
+        status: hit.status,
+        medianGapDays: hit.medianGapDays,
+        madDays: hit.madDays,
+        observationCount: hit.observationCount,
+        windowStart: hit.windowStart ? hit.windowStart.toISOString() : null,
+        windowEnd: hit.windowEnd ? hit.windowEnd.toISOString() : null,
+        reasons: hit.reasons,
+        methodVersion: hit.methodVersion,
+        inputsHash: hit.inputsHash,
+        computedAt: hit.computedAt,
+      };
+    },
+    async listForUser() {
+      return [];
+    },
+  };
+
+  return {
+    observations,
+    entities,
+    relationships,
+    facts,
+    episodes,
+    jobs,
+    messages,
+    interactionEvents,
+    baselines,
+  };
 }
 
 export function ingestionDeps(

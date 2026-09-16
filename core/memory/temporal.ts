@@ -113,3 +113,31 @@ export function resolveTemporal(input: {
 
   return { occurredAt: referenceAt, precision: "unknown", matched: null };
 }
+
+/**
+ * The window an absence assertion covers.
+ *
+ * "I haven't seen John this week" is positive evidence of NON-occurrence over
+ * a span, not a point event (D6), and the schema enforces that an absence row
+ * carries both ends. A window is only derived when the person's own phrase
+ * supports one: if the resolver fell back to "unknown", no window is invented
+ * and the caller records nothing. Guessing a span would fabricate the very
+ * evidence the pattern layer rests on.
+ */
+export function resolveAbsenceWindow(input: {
+  claim: TemporalClaim;
+  referenceAt: Date;
+}): { start: Date; end: Date } | null {
+  const resolved = resolveTemporal(input);
+  if (resolved.matched === null || resolved.precision === "unknown") return null;
+
+  // A week-scale phrase ("this week") runs from its start up to the moment they
+  // said it. A day-scale phrase covers that single day.
+  const end =
+    resolved.precision === "week"
+      ? input.referenceAt
+      : new Date(resolved.occurredAt.getTime() + DAY_MS);
+
+  if (end.getTime() <= resolved.occurredAt.getTime()) return null;
+  return { start: resolved.occurredAt, end };
+}

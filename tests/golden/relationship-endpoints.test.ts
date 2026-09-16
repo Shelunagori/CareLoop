@@ -128,6 +128,7 @@ describe("the live failure mode, reproduced", () => {
     ],
     facts: [],
     episodes: [],
+    interactions: [],
   };
 
   it("is refused rather than mis-attached, and says so in the resolution", async () => {
@@ -161,6 +162,7 @@ describe("self-reference guard (defence in depth)", () => {
       { subjectMention: "I", key: "preferred_drink", value: "tea", explicitlyConfirmed: false, confidence: 0.8, sourceSpan: "I have tea" },
     ],
     episodes: [],
+    interactions: [],
   };
 
   it("treats a bare pronoun as the user, never as an entity", async () => {

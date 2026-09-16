@@ -8,10 +8,15 @@ import type { JobRecord, JobsRepo } from "@/server/repositories/jobs";
 import type { MessagesRepo } from "@/server/repositories/messages";
 import type { ObservationsRepo } from "@/server/repositories/observations";
 import type { RelationshipsRepo } from "@/server/repositories/relationships";
+import type { InteractionEventsRepo } from "@/server/repositories/interaction-events";
+import type { BaselinesRepo } from "@/server/repositories/baselines";
+import { deriveInteractionEvents } from "@/core/baseline/derive-events";
+import { recomputeSeries, type SeriesEventType } from "./baseline";
 import { extractionPromptV1 } from "@/server/prompts/extraction.v1";
 import {
   EXTRACTION_CONTRACT_VERSION,
   EXTRACTION_V1_JSON_SCHEMA,
+  ExtractionV1LiveSchema,
   ExtractionV1Schema,
   type ExtractionV1,
 } from "@/core/memory/extraction-contract";
@@ -57,6 +62,8 @@ export type IngestionDeps = {
   episodes: EpisodesRepo;
   jobs: JobsRepo;
   messages: MessagesRepo;
+  interactionEvents: InteractionEventsRepo;
+  baselines: BaselinesRepo;
   extraction: ExtractionProvider;
   embeddings: EmbeddingProvider;
   clock: Clock;
@@ -81,6 +88,10 @@ export type IngestResolution = {
   relationshipIds: string[];
   factIds: string[];
   episodeIds: string[];
+  /** M3: countable contact derived deterministically from the observation. */
+  interactionEventCount: number;
+  /** M3: "<entityId>:<eventType>" pairs whose baseline was recomputed. */
+  baselinesRecomputed: string[];
   ambiguousMentions: string[];
   skipped: string[];
 };
@@ -164,6 +175,7 @@ export async function processIngestJob(
   let extracted: ExtractionV1;
 
   if (observation) {
+    // Stored payload: tolerant parser, so pre-M3 observations still replay.
     const reparsed = ExtractionV1Schema.safeParse(observation.payload);
     if (!reparsed.success) throw new ExtractionSchemaError(reparsed.error.issues);
     extracted = reparsed.data;
@@ -176,7 +188,9 @@ export async function processIngestJob(
       jsonSchema: EXTRACTION_V1_JSON_SCHEMA,
     });
 
-    const parsed = ExtractionV1Schema.safeParse(response.raw);
+    // Live response: strict parser. `interactions` must be present, even when
+    // empty - the provider was sent a schema that requires it.
+    const parsed = ExtractionV1LiveSchema.safeParse(response.raw);
     if (!parsed.success) {
       // Nothing is written: a malformed response leaves the job retryable and
       // memory untouched rather than half-corrupted.
@@ -233,6 +247,8 @@ async function commitMemory(
     relationshipIds: [],
     factIds: [],
     episodeIds: [],
+    interactionEventCount: 0,
+    baselinesRecomputed: [],
     ambiguousMentions: [],
     skipped: [],
   };
@@ -553,5 +569,74 @@ async function commitMemory(
     }
   }
 
+  // --- interaction events + baselines (M3) ----------------------------------
+  // Deterministic end to end. The model reported that contact was described;
+  // everything from here - whether a row exists, when it happened, and what it
+  // means for a rhythm - is decided by pure code.
+  await deriveAndRecompute(deps, ctx, byMention, resolution);
+
   return resolution;
+}
+
+async function deriveAndRecompute(
+  deps: IngestionDeps,
+  ctx: {
+    userId: string;
+    messageId: string;
+    messageAt: Date;
+    observationId: string;
+    extracted: ExtractionV1;
+  },
+  byMention: ReadonlyMap<string, string>,
+  resolution: IngestResolution,
+): Promise<void> {
+  const derived = deriveInteractionEvents({
+    claims: ctx.extracted.interactions,
+    entityIdByMention: byMention,
+    sourceObservationId: ctx.observationId,
+    // The anchor is when the person SPOKE, never when the job happens to run.
+    reportedAt: ctx.messageAt,
+  });
+
+  for (const skip of derived.skipped) {
+    resolution.skipped.push(`interaction:${skip.participantMention}:${skip.reason}`);
+  }
+  if (derived.events.length === 0) return;
+
+  await deps.interactionEvents.insertMany(
+    derived.events.map((event) => ({
+      userId: ctx.userId,
+      entityId: event.entityId,
+      eventType: event.eventType,
+      occurredAt: event.occurredAt.toISOString(),
+      occurredAtPrecision: event.occurredAtPrecision,
+      reportedAt: event.reportedAt.toISOString(),
+      certainty: event.certainty,
+      polarity: event.polarity,
+      windowStart: event.windowStart ? event.windowStart.toISOString() : null,
+      windowEnd: event.windowEnd ? event.windowEnd.toISOString() : null,
+      sourceObservationId: event.sourceObservationId,
+      ingestFingerprint: event.ingestFingerprint,
+    })),
+  );
+  resolution.interactionEventCount = derived.events.length;
+
+  // Targeted recompute: only the series this turn actually touched, and only
+  // where positive evidence changed. An absence assertion never contributes to
+  // positive cadence, so recomputing for one would be a guaranteed no-op.
+  //
+  // This is one of two triggers. The other is a stale READ (services/baseline
+  // readBaseline), which exists because evidence ages out of the lookback
+  // window with no new event to notice it.
+  const touched = new Set(
+    derived.events
+      .filter((event) => event.polarity === "positive")
+      .map((event) => `${event.entityId}:${event.eventType}`),
+  );
+
+  for (const key of touched) {
+    const [entityId, eventType] = key.split(":") as [string, SeriesEventType];
+    await recomputeSeries(deps, { userId: ctx.userId, entityId, eventType });
+    resolution.baselinesRecomputed.push(key);
+  }
 }

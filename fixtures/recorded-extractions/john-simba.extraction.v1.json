@@ -46,13 +46,20 @@
         "episodes": [
           {
             "summary": "John visited with his dog Simba, who got mud all over the kitchen.",
-            "participantMentions": ["my son John", "his dog Simba"],
-            "temporal": { "expression": "yesterday", "absoluteDate": null },
+            "participantMentions": [
+              "my son John",
+              "his dog Simba"
+            ],
+            "temporal": {
+              "expression": "yesterday",
+              "absoluteDate": null
+            },
             "emotionWords": [],
             "confidence": 0.93,
             "sourceSpan": "visited yesterday with his dog Simba"
           }
-        ]
+        ],
+        "interactions": []
       }
     },
     {
@@ -110,13 +117,20 @@
         "episodes": [
           {
             "summary": "John rang to say Simba was fine after a vet visit.",
-            "participantMentions": ["John", "Simba"],
-            "temporal": { "expression": null, "absoluteDate": null },
+            "participantMentions": [
+              "John",
+              "Simba"
+            ],
+            "temporal": {
+              "expression": null,
+              "absoluteDate": null
+            },
             "emotionWords": [],
             "confidence": 0.89,
             "sourceSpan": "John rang to say Simba is fine after the vet"
           }
-        ]
+        ],
+        "interactions": []
       }
     }
   ]

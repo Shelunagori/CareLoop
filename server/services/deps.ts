@@ -12,8 +12,11 @@ import { jobsRepo } from "@/server/repositories/jobs";
 import { messagesRepo } from "@/server/repositories/messages";
 import { observationsRepo } from "@/server/repositories/observations";
 import { relationshipsRepo } from "@/server/repositories/relationships";
+import { interactionEventsRepo } from "@/server/repositories/interaction-events";
+import { baselinesRepo } from "@/server/repositories/baselines";
 import type { ConversationDataDeps, ConversationDeps } from "./conversation";
 import type { IngestionDeps } from "./ingestion";
+import type { BaselineDebugDeps } from "./baseline-debug";
 import { loadMemoryForTurn } from "./memory-retrieval";
 
 /**
@@ -56,8 +59,35 @@ export function createIngestionDeps(): IngestionDeps {
     episodes: episodesRepo(db),
     jobs: jobsRepo(db),
     messages: messagesRepo(db),
+    interactionEvents: interactionEventsRepo(db),
+    baselines: baselinesRepo(db),
     extraction: createOpenAiExtraction(),
     embeddings: createOpenAiEmbeddings(),
+    clock: systemClock,
+  };
+}
+
+/** Read-only deps for the development derivation inspector. */
+export function createBaselineDebugDeps(): BaselineDebugDeps {
+  const db = createServiceRoleClient();
+  return {
+    entities: entitiesRepo(db),
+    interactionEvents: interactionEventsRepo(db),
+    baselines: baselinesRepo(db),
+    clock: systemClock,
+  };
+}
+
+/**
+ * Development-only seeding deps (app/api/dev/seed-events). Same repositories
+ * as production; only the caller is gated.
+ */
+export function createM3SeedDeps() {
+  const db = createServiceRoleClient();
+  return {
+    entities: entitiesRepo(db),
+    interactionEvents: interactionEventsRepo(db),
+    baselines: baselinesRepo(db),
     clock: systemClock,
   };
 }

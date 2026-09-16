@@ -64,3 +64,49 @@ export const ingestionConfig = {
   /** Claims below this extraction confidence are discarded outright. */
   minClaimConfidence: 0.35,
 } as const;
+
+
+/**
+ * Whether the M3 derivation inspector is available.
+ *
+ * An ALLOW-LIST, and fail-closed, for the same reason the development user
+ * fallback is (server/auth/resolve-user.ts): a deny-list on "production"
+ * quietly opens on any unexpected NODE_ENV, including undefined. The debug
+ * surface reads one person's entire social history in raw form, so it must be
+ * absent - not merely guarded - anywhere that is not local development.
+ */
+export type DebugEnv = { NODE_ENV?: string; VERCEL?: string };
+
+export function isDebugSurfaceEnabled(env: DebugEnv): boolean {
+  if (env.NODE_ENV !== "development") return false;
+  // Never on a deployment, even if NODE_ENV were tampered with.
+  if (env.VERCEL) return false;
+  return true;
+}
+
+/**
+ * Authorization for the development-only M3 seeding route.
+ *
+ * Four conditions, all required, evaluated as an allow-list so any unexpected
+ * environment fails closed: local development, not a deployment, a secret
+ * actually configured, and the supplied secret matching it. A configured-but-
+ * empty secret is treated as absent - otherwise a blank env var would open the
+ * route to anyone who sends a blank header.
+ */
+export type DevSeedAuth =
+  | { allowed: true }
+  | { allowed: false; reason: "not_development" | "deployed" | "secret_not_configured" | "secret_mismatch" };
+
+export function authorizeDevSeed(
+  env: DebugEnv & { CARELOOP_DEV_SEED_SECRET?: string },
+  suppliedSecret: string | null,
+): DevSeedAuth {
+  if (env.NODE_ENV !== "development") return { allowed: false, reason: "not_development" };
+  if (env.VERCEL) return { allowed: false, reason: "deployed" };
+
+  const configured = env.CARELOOP_DEV_SEED_SECRET;
+  if (!configured) return { allowed: false, reason: "secret_not_configured" };
+  if (suppliedSecret !== configured) return { allowed: false, reason: "secret_mismatch" };
+
+  return { allowed: true };
+}
