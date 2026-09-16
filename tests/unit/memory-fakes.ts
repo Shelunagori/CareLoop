@@ -113,6 +113,9 @@ export function fakeEmbeddings(options: {
 
 export function fakeMemoryRepos(store: MemoryStore) {
   const observations: ObservationsRepo = {
+    async findById(_userId, id) {
+      return store.observations.find((o) => o.id === id) ?? null;
+    },
     async findByMessage(userId, sourceMessageId, kind) {
       return (
         store.observations.find(
@@ -354,8 +357,10 @@ export function fakeMemoryRepos(store: MemoryStore) {
             event.occurredAt >= sinceIso,
         )
         .sort((a, b) => a.occurredAt.localeCompare(b.occurredAt))
-        .map((event, index) => ({
-          id: `ie-${index}`,
+        .map((event) => ({
+          // Stable across queries, like a real row id — the detection layer
+          // uses the last event's id as part of a signal's identity.
+          id: `ie-${event.ingestFingerprint}`,
           entityId: event.entityId,
           eventType: event.eventType,
           occurredAt: event.occurredAt,
@@ -365,8 +370,41 @@ export function fakeMemoryRepos(store: MemoryStore) {
           polarity: event.polarity,
           windowStart: event.windowStart,
           windowEnd: event.windowEnd,
+          sourceObservationId: event.sourceObservationId ?? null,
           ingestFingerprint: event.ingestFingerprint,
         }));
+    },
+    async listRecentAbsences({ userId, sinceReportedIso, limit }) {
+      return store.interactionEvents
+        .filter(
+          (event) =>
+            event.userId === userId &&
+            event.polarity === "absence" &&
+            event.reportedAt >= sinceReportedIso,
+        )
+        .sort((a, b) => b.reportedAt.localeCompare(a.reportedAt))
+        .slice(0, limit)
+        .map((event) => ({
+          id: `ie-${event.ingestFingerprint}`,
+          entityId: event.entityId,
+          eventType: event.eventType,
+          occurredAt: event.occurredAt,
+          occurredAtPrecision: event.occurredAtPrecision,
+          reportedAt: event.reportedAt,
+          certainty: event.certainty,
+          polarity: event.polarity,
+          windowStart: event.windowStart,
+          windowEnd: event.windowEnd,
+          sourceObservationId: event.sourceObservationId ?? null,
+          ingestFingerprint: event.ingestFingerprint,
+        }));
+    },
+    async earliestOccurredAt(userId) {
+      const ordered = store.interactionEvents
+        .filter((event) => event.userId === userId)
+        .map((event) => event.occurredAt)
+        .sort();
+      return ordered[0] ?? null;
     },
   };
 

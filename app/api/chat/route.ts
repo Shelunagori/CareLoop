@@ -5,9 +5,14 @@ import {
   ConversationNotFoundError,
   handleTurn,
 } from "@/server/services/conversation";
-import { createConversationDeps, createIngestionDeps } from "@/server/services/deps";
+import {
+  createConversationDeps,
+  createIngestionDeps,
+  createReconnectDeps,
+} from "@/server/services/deps";
 import { ingestionConfig } from "@/server/config";
 import { runIngestionSweep } from "@/server/services/ingestion";
+import { runDetectionSweep } from "@/server/services/reconnect";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -91,6 +96,28 @@ export async function POST(request: Request) {
       console.error(
         JSON.stringify({
           event: "ingest.sweep_failed",
+          errorName: error instanceof Error ? error.name : "UnknownError",
+        }),
+      );
+    }
+
+    // M4, path B. Separate try/catch and separate deps on purpose: a renderer
+    // outage must not roll back ingestion, and neither may reach the reply,
+    // which was fully streamed before `after` ran.
+    //
+    // It is a SWEEP rather than a reaction to this turn's events, because the
+    // interesting cadence case is the one where nothing was written: weekly
+    // visits, the last one thirteen days ago, and today's chat was about the
+    // garden. Bounded in server/config.ts (detectionSweepConfig).
+    try {
+      await runDetectionSweep(createReconnectDeps(), {
+        userId,
+        conversationId: turn.conversationId,
+      });
+    } catch (error) {
+      console.error(
+        JSON.stringify({
+          event: "detection.sweep_failed",
           errorName: error instanceof Error ? error.name : "UnknownError",
         }),
       );

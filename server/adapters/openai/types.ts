@@ -1,3 +1,5 @@
+import type { SharePayload } from "@/core/share/payload";
+
 /**
  * The LLM port. Pure types — no SDK import, no secrets — so services and their
  * tests can depend on this without pulling in a network client.
@@ -61,4 +63,30 @@ export interface ExtractionProvider {
  */
 export interface EmbeddingProvider {
   embed(texts: readonly string[]): Promise<number[][]>;
+}
+
+/**
+ * Family message rendering (M4). A THIRD port, deliberately separate from both
+ * LlmProvider and ExtractionProvider.
+ *
+ * The separation is the privacy guarantee in type form. This interface takes a
+ * SharePayload — six whitelisted fields — and nothing else. There is no
+ * parameter for messages, history, memory or free text, so the code that
+ * builds the outbound prompt cannot reach a transcript even by mistake. A
+ * shared `LlmProvider.complete(messages)` would have made "no history in
+ * context" a matter of every future call site remembering (docs/04 s11.4).
+ */
+export type FamilyRenderRequest = {
+  promptRef: string;
+  payload: SharePayload;
+};
+
+export type FamilyRenderResponse = {
+  /** Raw provider text. Unguarded — the caller runs the output guard. */
+  text: string;
+  model: string;
+};
+
+export interface FamilyRenderProvider {
+  render(request: FamilyRenderRequest): Promise<FamilyRenderResponse>;
 }

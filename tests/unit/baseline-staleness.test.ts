@@ -61,11 +61,19 @@ function harness(options: {
               polarity: "positive",
               windowStart: null,
               windowEnd: null,
+              sourceObservationId: null,
               ingestFingerprint: `fp-${index}`,
             };
           })
           // The repository applies the lookback cutoff; mirror that here.
           .filter((row) => row.occurredAt >= sinceIso);
+      },
+      // Added to the port in M4; this harness exercises neither.
+      async listRecentAbsences() {
+        return [];
+      },
+      async earliestOccurredAt() {
+        return null;
       },
     },
     baselines: {

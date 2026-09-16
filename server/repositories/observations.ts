@@ -25,6 +25,12 @@ export type ObservationRecord = {
 export type ObservationsRepo = {
   /** Replay safety: an already-extracted message is never re-extracted. */
   findByMessage(userId: string, sourceMessageId: string, kind: string): Promise<ObservationRecord | null>;
+  /**
+   * Provenance read: the raw payload behind one derived row. Scoped by user in
+   * the WHERE clause, not checked afterwards - there is no code path that
+   * reads an observation without saying whose it is.
+   */
+  findById(userId: string, id: string): Promise<ObservationRecord | null>;
   insert(input: {
     userId: string;
     sourceMessageId: string;
@@ -67,6 +73,17 @@ export function observationsRepo(db: Db): ObservationsRepo {
         .eq("kind", kind)
         .maybeSingle();
       if (error) throw new Error(`findObservation failed: ${error.message}`);
+      return data ? toRecord(data) : null;
+    },
+
+    async findById(userId, id) {
+      const { data, error } = await db
+        .from("observations")
+        .select(select)
+        .eq("user_id", userId)
+        .eq("id", id)
+        .maybeSingle();
+      if (error) throw new Error(`findObservationById failed: ${error.message}`);
       return data ? toRecord(data) : null;
     },
 

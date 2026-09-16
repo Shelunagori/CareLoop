@@ -10,7 +10,12 @@ import { createHash } from "node:crypto";
  * retaining what was said.
  */
 export type ProviderLog = {
-  event: "llm.chat" | "llm.extract" | "llm.embed" | "ingest.job";
+  event:
+    | "llm.chat"
+    | "llm.extract"
+    | "llm.embed"
+    | "llm.family_render"
+    | "ingest.job";
   outcome: string;
   latencyMs: number;
   model?: string;

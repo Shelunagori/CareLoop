@@ -12,30 +12,52 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * Development-only evidence seeder for M3.
+ * Development-only evidence seeder (M3, extended for M4).
  *
  * A baseline needs four weeks of history, which is a long time to wait to find
  * out whether the maths works. This creates that history the honest way: it
  * writes real interaction_events through the real repository and recomputes
- * through the real pure function. There is no seed-specific baseline path, and
- * no user is special-cased - the preset only chooses day offsets.
+ * through the real pure function. There is no seed-specific baseline path, no
+ * seed-specific detector path, and no user is special-cased - the preset only
+ * chooses day offsets and a polarity.
  *
  * It is NOT the M6 demo fixture: no conversation, no extraction, no George.
  */
+type Preset =
+  | { kind: "positive"; offsets: readonly number[] }
+  | { kind: "absence"; windowDays: number };
+
 const PRESETS = {
-  /** Weekly, low dispersion -> ACTIVE, median 7, MAD 0, threshold 11. */
-  weekly: [35, 28, 21, 14, 7, 0],
-  /** Same count and span, wildly uneven -> IRREGULAR. */
-  irregular: [75, 35, 32, 2, 0],
+  /** Weekly, last contact today -> ACTIVE, median 7, MAD 0, no cadence gap. */
+  weekly: { kind: "positive", offsets: [35, 28, 21, 14, 7, 0] },
+  /**
+   * Weekly, last contact 13 days ago -> ACTIVE, median 7, MAD 0,
+   * threshold 11, 13 > 11 -> cadence_gap fires. The margin is deliberately
+   * two days, so a threshold regression breaks this loudly (R5).
+   */
+  "cadence-gap": { kind: "positive", offsets: [48, 41, 34, 27, 20, 13] },
+  /** Same count and span, wildly uneven -> IRREGULAR, detector must not run. */
+  irregular: { kind: "positive", offsets: [75, 35, 32, 2, 0] },
   /** Too few events to be a rhythm -> NO_BASELINE. */
-  sparse: [30, 15],
-} as const;
+  sparse: { kind: "positive", offsets: [30, 15] },
+  /**
+   * One explicit absence assertion over a week, and nothing else. Produces
+   * NO_BASELINE, which is the point: the user's own statement needs no rhythm.
+   */
+  absence: { kind: "absence", windowDays: 7 },
+} as const satisfies Record<string, Preset>;
 
 const SeedRequestSchema = z.object({
-  preset: z.enum(["weekly", "irregular", "sparse"]),
+  preset: z.enum(["weekly", "cadence-gap", "irregular", "sparse", "absence"]),
   entityName: z.string().trim().min(1).max(80),
   eventType: z.enum(["visit", "call"]).default("visit"),
 });
+
+function utcMidnight(now: Date, daysAgo: number): Date {
+  return new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) - daysAgo * DAY_MS,
+  );
+}
 
 export async function POST(request: Request) {
   // Fail closed. Anything other than local development with a configured and
@@ -68,43 +90,63 @@ export async function POST(request: Request) {
       displayName: entityName,
     }));
 
-  const offsets = PRESETS[preset];
-  await deps.interactionEvents.insertMany(
-    offsets.map((daysAgo) => {
-      const occurredAt = new Date(
-        Date.UTC(
-          now.getUTCFullYear(),
-          now.getUTCMonth(),
-          now.getUTCDate(),
-        ) - daysAgo * DAY_MS,
-      );
-      return {
+  const spec: Preset = PRESETS[preset];
+
+  const fingerprint = (parts: readonly (string | number)[]) =>
+    stableHash(["dev-seed.v1", userId, entity.id, eventType, preset, ...parts]);
+
+  if (spec.kind === "positive") {
+    await deps.interactionEvents.insertMany(
+      spec.offsets.map((daysAgo) => {
+        const occurredAt = utcMidnight(now, daysAgo);
+        return {
+          userId,
+          entityId: entity.id,
+          eventType,
+          occurredAt: occurredAt.toISOString(),
+          occurredAtPrecision: "day" as const,
+          reportedAt: occurredAt.toISOString(),
+          certainty: 0.9,
+          polarity: "positive" as const,
+          windowStart: null,
+          windowEnd: null,
+          sourceObservationId: null,
+          // Deterministic, so re-running the same preset writes nothing new.
+          ingestFingerprint: fingerprint([occurredAt.toISOString()]),
+        };
+      }),
+    );
+  } else {
+    const windowStart = utcMidnight(now, spec.windowDays);
+    // The window ends at the moment it was reported, exactly as the temporal
+    // resolver does for a week-scale phrase like "this week".
+    const windowEnd = now;
+    await deps.interactionEvents.insertMany([
+      {
         userId,
         entityId: entity.id,
         eventType,
-        occurredAt: occurredAt.toISOString(),
+        occurredAt: windowStart.toISOString(),
         occurredAtPrecision: "day" as const,
-        reportedAt: occurredAt.toISOString(),
+        reportedAt: windowEnd.toISOString(),
         certainty: 0.9,
-        polarity: "positive" as const,
-        windowStart: null,
-        windowEnd: null,
+        polarity: "absence" as const,
+        windowStart: windowStart.toISOString(),
+        windowEnd: windowEnd.toISOString(),
         sourceObservationId: null,
-        // Deterministic, so re-running the same preset writes nothing new.
-        ingestFingerprint: stableHash([
-          "dev-seed.v1",
-          userId,
-          entity.id,
-          eventType,
-          preset,
-          occurredAt.toISOString(),
+        // Bucketed to the day so repeated seeding within one day is idempotent.
+        ingestFingerprint: fingerprint([
+          "absence",
+          windowStart.toISOString(),
+          windowEnd.toISOString().slice(0, 10),
         ]),
-      };
-    }),
-  );
+      },
+    ]);
+  }
 
   // Recomputed and persisted through the ordinary service path - there is no
-  // seed-specific baseline logic.
+  // seed-specific baseline logic. For the absence preset this deliberately
+  // yields NO_BASELINE: an absence assertion is never positive cadence.
   const baseline = await recomputeSeries(deps, { userId, entityId: entity.id, eventType });
 
   return NextResponse.json({

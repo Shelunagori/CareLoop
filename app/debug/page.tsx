@@ -2,7 +2,11 @@ import { notFound } from "next/navigation";
 import { isDebugSurfaceEnabled } from "@/server/config";
 import { getCurrentUserId } from "@/server/auth/current-user";
 import { loadBaselineDerivations } from "@/server/services/baseline-debug";
-import { createBaselineDebugDeps } from "@/server/services/deps";
+import { loadDetectionDebug } from "@/server/services/detection-debug";
+import {
+  createBaselineDebugDeps,
+  createDetectionDebugDeps,
+} from "@/server/services/deps";
 
 export const dynamic = "force-dynamic";
 
@@ -27,10 +31,11 @@ export default async function DebugPage() {
     );
   }
 
-  const derivations = await loadBaselineDerivations(createBaselineDebugDeps(), {
-    userId,
-    now: new Date(),
-  });
+  const now = new Date();
+  const [derivations, signals] = await Promise.all([
+    loadBaselineDerivations(createBaselineDebugDeps(), { userId, now }),
+    loadDetectionDebug(createDetectionDebugDeps(), { userId, now }),
+  ]);
 
   return (
     <main className="mx-auto max-w-3xl space-y-8 p-8 font-mono text-sm">
@@ -135,6 +140,111 @@ export default async function DebugPage() {
           )}
         </section>
       ))}
+
+      <section className="space-y-4 border-t-4 pt-6">
+        <header className="font-sans">
+          <h2 className="text-base font-semibold">Detection &rarr; draft (M4)</h2>
+          <p className="text-neutral-600">
+            Every signal this account has produced, why it was or was not acted
+            on, and the exact bytes that would be sent. Development only.
+          </p>
+        </header>
+
+        {signals.length === 0 && (
+          <p className="font-sans text-neutral-500">No signals yet.</p>
+        )}
+
+        {signals.map((s) => (
+          <article key={s.id} className="space-y-2 border-t pt-4">
+            <h3 className="font-sans text-base font-semibold">
+              {s.entityName} &mdash; {s.signalType}{" "}
+              <span
+                className={
+                  s.status === "materialized"
+                    ? "text-green-700"
+                    : s.status === "suppressed"
+                      ? "text-amber-700"
+                      : "text-neutral-500"
+                }
+              >
+                {s.status}
+              </span>
+            </h3>
+
+            <dl className="grid grid-cols-[13rem_1fr] gap-x-4 gap-y-1">
+              <dt>detected at</dt>
+              <dd>{s.detectedAt}</dd>
+              <dt>materialized at</dt>
+              <dd>{s.materializedAt ?? "\u2014"}</dd>
+              <dt>suppression reason</dt>
+              <dd className={s.suppressionReason ? "text-amber-700" : ""}>
+                {s.suppressionReason ?? "\u2014"}
+              </dd>
+              <dt>explanation</dt>
+              <dd className="whitespace-pre-wrap break-all">
+                {JSON.stringify(s.explanation, null, 2)}
+              </dd>
+            </dl>
+
+            {s.opportunity === null ? (
+              <p className="font-sans text-neutral-500">No opportunity.</p>
+            ) : (
+              <dl className="grid grid-cols-[13rem_1fr] gap-x-4 gap-y-1 border-l-2 pl-4">
+                <dt>opportunity</dt>
+                <dd>
+                  {s.opportunity.id} &mdash;{" "}
+                  <span className="font-semibold">{s.opportunity.status}</span>
+                </dd>
+                <dt>expires at</dt>
+                <dd>
+                  {s.opportunity.expiresAt}{" "}
+                  {s.opportunity.expired && (
+                    <span className="text-red-700">(past &mdash; not offerable)</span>
+                  )}
+                </dd>
+                <dt>proposal</dt>
+                <dd className="whitespace-pre-wrap break-all">
+                  {JSON.stringify(s.opportunity.proposal, null, 2)}
+                </dd>
+                <dt>share payload (outbound)</dt>
+                <dd className="whitespace-pre-wrap break-all">
+                  {s.opportunity.sharePayload
+                    ? JSON.stringify(s.opportunity.sharePayload, null, 2)
+                    : "\u2014"}
+                </dd>
+                <dt>rendered text</dt>
+                <dd className="whitespace-pre-wrap">
+                  {s.opportunity.renderedText ?? "\u2014"}
+                </dd>
+                <dt>rendered text hash</dt>
+                <dd className="break-all">
+                  {s.opportunity.renderedTextHash ?? "\u2014"}
+                </dd>
+                <dt>hash recomputes</dt>
+                <dd
+                  className={
+                    s.opportunity.hashMatchesText === false ? "text-red-700" : ""
+                  }
+                >
+                  {s.opportunity.hashMatchesText === null
+                    ? "\u2014"
+                    : s.opportunity.hashMatchesText
+                      ? "yes"
+                      : "NO \u2014 stored hash does not match stored text"}
+                </dd>
+                <dt>fallback used</dt>
+                <dd>
+                  {s.opportunity.fallbackUsed === null
+                    ? "\u2014"
+                    : s.opportunity.fallbackUsed
+                      ? "yes (deterministic template)"
+                      : "no (renderer output passed the guard)"}
+                </dd>
+              </dl>
+            )}
+          </article>
+        ))}
+      </section>
     </main>
   );
 }

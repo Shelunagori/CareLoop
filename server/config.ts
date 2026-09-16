@@ -31,6 +31,18 @@ export function extractionModel(): string {
   return process.env.OPENAI_EXTRACTION_MODEL ?? "gpt-4o";
 }
 
+/**
+ * Family-message renderer. Separately configurable on purpose: it is a
+ * different job with different requirements from conversation (one short
+ * sentence, no history, maximum conservatism), and being able to pin or
+ * downgrade it without touching the companion's voice is the point of the
+ * split. Falls back to the chat model so a missing variable is not an outage —
+ * the CALL SITE, prompt id and logging stay distinct either way (docs/05 s14.1).
+ */
+export function familyRenderModel(): string {
+  return process.env.OPENAI_FAMILY_RENDER_MODEL ?? chatModel();
+}
+
 export function embeddingModel(): string {
   return process.env.OPENAI_EMBEDDING_MODEL ?? "text-embedding-3-small";
 }
@@ -110,3 +122,34 @@ export function authorizeDevSeed(
 
   return { allowed: true };
 }
+
+
+/**
+ * M4 detection. Every number here is a BOUND: a sweep runs on an ordinary
+ * request, so it must cost a predictable amount no matter how much history an
+ * account has accumulated. Nothing full-scans.
+ */
+export const detectionSweepConfig = {
+  /** ACTIVE baseline series examined for a cadence gap in one sweep. */
+  maxSeriesPerSweep: 10,
+  /** Absence assertions examined in one sweep. */
+  maxAbsenceEventsPerSweep: 10,
+  /** How far back a not-yet-detected absence assertion stays eligible. */
+  absenceLookbackDays: 14,
+  /** Window used to recognise a detection this system already made. */
+  signalHistoryLookbackDays: 180,
+  signalHistoryLimit: 200,
+  /** Window used to assemble the suppression snapshot. */
+  opportunityHistoryLookbackDays: 180,
+  opportunityHistoryLimit: 100,
+  openOpportunityLimit: 20,
+  /** New signals persisted per sweep. */
+  maxSignalsPerSweep: 3,
+  /**
+   * Renders per sweep. One, so a single request can never turn into a burst of
+   * model calls, and so the cost of a sweep has a hard ceiling.
+   */
+  maxDraftsPerSweep: 1,
+  /** Confirmed related entities that may be mentioned outbound. */
+  maxRelatedEntities: 1,
+} as const;

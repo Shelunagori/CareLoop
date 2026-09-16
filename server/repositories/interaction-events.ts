@@ -32,6 +32,8 @@ export type InteractionEventRecord = {
   polarity: Polarity;
   windowStart: string | null;
   windowEnd: string | null;
+  /** Provenance: the immutable observation this row was derived from. */
+  sourceObservationId: string | null;
   ingestFingerprint: string;
 };
 
@@ -49,10 +51,57 @@ export type InteractionEventsRepo = {
     eventType: EventType;
     sinceIso: string;
   }): Promise<InteractionEventRecord[]>;
+  /**
+   * Absence assertions reported within a bounded recent window, newest first.
+   *
+   * Keyed on `reported_at`, not `occurred_at`: the detector is asking "what
+   * has this person told us lately", which is a freshness question, and the
+   * occurred/reported split exists precisely so those two are not confused
+   * (docs/02 section 7).
+   */
+  listRecentAbsences(input: {
+    userId: string;
+    sinceReportedIso: string;
+    limit: number;
+  }): Promise<InteractionEventRecord[]>;
+  /** Oldest recorded contact for this user, or null. Cold-start input. */
+  earliestOccurredAt(userId: string): Promise<string | null>;
 };
 
 const SELECT =
-  "id, entity_id, event_type, occurred_at, occurred_at_precision, reported_at, certainty, polarity, window_start, window_end, ingest_fingerprint";
+  "id, entity_id, event_type, occurred_at, occurred_at_precision, reported_at, certainty, polarity, window_start, window_end, source_observation_id, ingest_fingerprint";
+
+type Row = {
+  id: string;
+  entity_id: string;
+  event_type: EventType;
+  occurred_at: string;
+  occurred_at_precision: TimePrecision;
+  reported_at: string;
+  certainty: number | string;
+  polarity: Polarity;
+  window_start: string | null;
+  window_end: string | null;
+  source_observation_id: string | null;
+  ingest_fingerprint: string;
+};
+
+function toRecord(row: Row): InteractionEventRecord {
+  return {
+    id: row.id,
+    entityId: row.entity_id,
+    eventType: row.event_type,
+    occurredAt: row.occurred_at,
+    occurredAtPrecision: row.occurred_at_precision,
+    reportedAt: row.reported_at,
+    certainty: Number(row.certainty),
+    polarity: row.polarity,
+    windowStart: row.window_start,
+    windowEnd: row.window_end,
+    sourceObservationId: row.source_observation_id,
+    ingestFingerprint: row.ingest_fingerprint,
+  };
+}
 
 export function interactionEventsRepo(db: Db): InteractionEventsRepo {
   return {
@@ -92,19 +141,32 @@ export function interactionEventsRepo(db: Db): InteractionEventsRepo {
         .gte("occurred_at", sinceIso)
         .order("occurred_at", { ascending: true });
       if (error) throw new Error(`listInteractionEvents failed: ${error.message}`);
-      return (data ?? []).map((row) => ({
-        id: row.id,
-        entityId: row.entity_id,
-        eventType: row.event_type,
-        occurredAt: row.occurred_at,
-        occurredAtPrecision: row.occurred_at_precision,
-        reportedAt: row.reported_at,
-        certainty: Number(row.certainty),
-        polarity: row.polarity,
-        windowStart: row.window_start,
-        windowEnd: row.window_end,
-        ingestFingerprint: row.ingest_fingerprint,
-      }));
+      return (data ?? []).map(toRecord);
+    },
+
+    async listRecentAbsences({ userId, sinceReportedIso, limit }) {
+      const { data, error } = await db
+        .from("interaction_events")
+        .select(SELECT)
+        .eq("user_id", userId)
+        .eq("polarity", "absence")
+        .gte("reported_at", sinceReportedIso)
+        .order("reported_at", { ascending: false })
+        .limit(limit);
+      if (error) throw new Error(`listRecentAbsences failed: ${error.message}`);
+      return (data ?? []).map(toRecord);
+    },
+
+    async earliestOccurredAt(userId) {
+      const { data, error } = await db
+        .from("interaction_events")
+        .select("occurred_at")
+        .eq("user_id", userId)
+        .order("occurred_at", { ascending: true })
+        .limit(1)
+        .maybeSingle();
+      if (error) throw new Error(`earliestInteractionEvent failed: ${error.message}`);
+      return data ? data.occurred_at : null;
     },
   };
 }

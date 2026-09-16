@@ -35,6 +35,9 @@ export function fakeRepos(options: {
         ? { id: options.latestConversationId }
         : null;
     },
+    async earliestStartedAt() {
+      return null;
+    },
   };
 
   const messages: MessagesRepo = {

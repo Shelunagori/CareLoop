@@ -940,6 +940,17 @@ export type Database = {
           summary: string
         }[]
       }
+      materialize_signal: {
+        Args: {
+          p_entity_id: string
+          p_expires_at: string
+          p_now?: string
+          p_proposal: Json
+          p_signal_id: string
+          p_user_id: string
+        }
+        Returns: Json
+      }
     }
     Enums: {
       baseline_status: "NO_BASELINE" | "IRREGULAR" | "ACTIVE"

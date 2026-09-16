@@ -14,9 +14,16 @@ import { observationsRepo } from "@/server/repositories/observations";
 import { relationshipsRepo } from "@/server/repositories/relationships";
 import { interactionEventsRepo } from "@/server/repositories/interaction-events";
 import { baselinesRepo } from "@/server/repositories/baselines";
+import { signalsRepo } from "@/server/repositories/signals";
+import { opportunitiesRepo } from "@/server/repositories/opportunities";
+import { profilesRepo } from "@/server/repositories/profiles";
+import { familyRequestsRepo } from "@/server/repositories/family-requests";
+import { createOpenAiFamilyRender } from "@/server/adapters/openai/family-render";
 import type { ConversationDataDeps, ConversationDeps } from "./conversation";
 import type { IngestionDeps } from "./ingestion";
 import type { BaselineDebugDeps } from "./baseline-debug";
+import type { ReconnectDeps } from "./reconnect";
+import type { DetectionDebugDeps } from "./detection-debug";
 import { loadMemoryForTurn } from "./memory-retrieval";
 
 /**
@@ -89,5 +96,39 @@ export function createM3SeedDeps() {
     interactionEvents: interactionEventsRepo(db),
     baselines: baselinesRepo(db),
     clock: systemClock,
+  };
+}
+
+/**
+ * M4 detection -> draft. Constructed only in the after-response path and in
+ * the development detection endpoint, so the family renderer is never
+ * instantiated on the hot path.
+ */
+export function createReconnectDeps(): ReconnectDeps {
+  const db = createServiceRoleClient();
+  return {
+    clock: systemClock,
+    signals: signalsRepo(db),
+    opportunities: opportunitiesRepo(db),
+    baselines: baselinesRepo(db),
+    interactionEvents: interactionEventsRepo(db),
+    entities: entitiesRepo(db),
+    relationships: relationshipsRepo(db),
+    observations: observationsRepo(db),
+    profiles: profilesRepo(db),
+    familyRequests: familyRequestsRepo(db),
+    conversations: conversationsRepo(db),
+    familyRender: createOpenAiFamilyRender(),
+  };
+}
+
+/** Read-only deps for the development detection inspector. */
+export function createDetectionDebugDeps(): DetectionDebugDeps {
+  const db = createServiceRoleClient();
+  return {
+    clock: systemClock,
+    signals: signalsRepo(db),
+    opportunities: opportunitiesRepo(db),
+    entities: entitiesRepo(db),
   };
 }

@@ -31,6 +31,9 @@ describe("LLM chokepoint", () => {
     expect(offenders).toEqual([
       "server/adapters/openai/embeddings.ts",
       "server/adapters/openai/extraction.ts",
+      // M4: the family renderer is a THIRD capability behind the same
+      // boundary, with its own model setting and prompt version.
+      "server/adapters/openai/family-render.ts",
       "server/adapters/openai/llm.ts",
     ]);
   });

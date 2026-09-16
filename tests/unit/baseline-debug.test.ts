@@ -94,9 +94,17 @@ function deps(options: {
               polarity: e.polarity ?? ("positive" as const),
               windowStart: null,
               windowEnd: null,
+              sourceObservationId: null,
               ingestFingerprint: `fp-${index}`,
             };
           });
+      },
+      // Added to the port in M4; this harness exercises neither.
+      async listRecentAbsences() {
+        return [];
+      },
+      async earliestOccurredAt() {
+        return null;
       },
     },
   };
