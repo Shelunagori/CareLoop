@@ -19,6 +19,8 @@ export type MessagesRepo = {
   }): Promise<StoredMessage>;
   /** Oldest-first, capped at `limit` most recent messages. */
   listRecent(conversationId: string, limit: number): Promise<StoredMessage[]>;
+  /** Used by post-turn ingestion to load the message a job refers to. */
+  findById(id: string): Promise<StoredMessage | null>;
 };
 
 export function messagesRepo(db: Db): MessagesRepo {
@@ -36,6 +38,18 @@ export function messagesRepo(db: Db): MessagesRepo {
         content: data.content,
         createdAt: data.created_at,
       };
+    },
+
+    async findById(id) {
+      const { data, error } = await db
+        .from("messages")
+        .select("id, role, content, created_at")
+        .eq("id", id)
+        .maybeSingle();
+      if (error) throw new Error(`findMessage failed: ${error.message}`);
+      return data
+        ? { id: data.id, role: data.role, content: data.content, createdAt: data.created_at }
+        : null;
     },
 
     async listRecent(conversationId, limit) {

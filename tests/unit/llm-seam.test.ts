@@ -20,12 +20,19 @@ function sourceFiles(dir: string): string[] {
 }
 
 describe("LLM chokepoint", () => {
-  it("is the only place the OpenAI SDK is imported", () => {
+  it("is imported only inside server/adapters/openai", () => {
     const offenders = [...sourceFiles("app"), ...sourceFiles("server"), ...sourceFiles("core")]
       .filter((file) => /from\s+["']openai["']/.test(readFileSync(file, "utf8")))
-      .map((file) => path.relative(root, file));
+      .map((file) => path.relative(root, file))
+      .sort();
 
-    expect(offenders).toEqual(["server/adapters/openai/llm.ts"]);
+    // One file per capability, all behind the adapter boundary. Services,
+    // routes and core never see the SDK.
+    expect(offenders).toEqual([
+      "server/adapters/openai/embeddings.ts",
+      "server/adapters/openai/extraction.ts",
+      "server/adapters/openai/llm.ts",
+    ]);
   });
 
   it("keeps the OpenAI key out of anything the browser could import", () => {

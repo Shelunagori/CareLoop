@@ -46,12 +46,43 @@ describe("assembleContext", () => {
     ).not.toThrow();
   });
 
-  it("refuses populated memory rather than silently dropping it", () => {
+  it("renders retrieved memory as a separate system message (M2)", () => {
+    const context = assembleContext({
+      recentTurns: [turn("user", "hi", 1)],
+      memory: {
+        ...EMPTY_MEMORY,
+        profileCard: "What you know about them:\n- preferred_drink: tea",
+        entityCards: ["Simba\n- pet (dog)\n- pet of John"],
+        episodes: ["- John visited with Simba (2026-09-15)"],
+      },
+    });
+
+    // The base prompt is never mutated.
+    expect(context.messages[0].content).toBe(conversationPromptV1.system);
+    expect(context.messages[1].role).toBe("system");
+    expect(context.messages[1].content).toContain("preferred_drink: tea");
+    expect(context.messages[1].content).toContain("Simba");
+    expect(context.messages[1].content).toContain("John visited with Simba");
+    // Recent turns still follow.
+    expect(context.messages[2]).toEqual({ role: "user", content: "hi" });
+  });
+
+  it("still refuses sections whose renderer does not exist yet (M4/M5)", () => {
     expect(() =>
       assembleContext({
         recentTurns: [],
-        memory: { ...EMPTY_MEMORY, profileCard: "George, 82" },
+        memory: { ...EMPTY_MEMORY, pendingClosure: "John says Sunday" },
       }),
-    ).toThrow(/not implemented until M2/);
+    ).toThrow(/not rendered until M4\/M5/);
+
+    expect(() =>
+      assembleContext({
+        recentTurns: [],
+        memory: {
+          ...EMPTY_MEMORY,
+          draftedOpportunityMarker: { entityId: "e1", entityName: "John", status: "drafted" },
+        },
+      }),
+    ).toThrow(/not rendered until M4\/M5/);
   });
 });

@@ -1,8 +1,9 @@
 import { chatConfig } from "@/server/config";
 import type { LlmProvider } from "@/server/adapters/openai/types";
 import type { ConversationsRepo } from "@/server/repositories/conversations";
+import type { JobsRepo } from "@/server/repositories/jobs";
 import type { MessagesRepo, StoredMessage } from "@/server/repositories/messages";
-import { assembleContext } from "./context";
+import { assembleContext, EMPTY_MEMORY, type MemorySections } from "./context";
 
 /**
  * Orchestration for one conversational turn. The route handler stays thin:
@@ -30,8 +31,19 @@ export type ConversationDataDeps = {
   messages: MessagesRepo;
 };
 
+/**
+ * Bounded memory for one turn. Injected rather than imported so the hot path
+ * stays testable without a database or an embedding provider.
+ */
+export type MemoryLoader = (input: {
+  userId: string;
+  text: string;
+}) => Promise<MemorySections>;
+
 export type ConversationDeps = ConversationDataDeps & {
   llm: LlmProvider;
+  jobs: JobsRepo;
+  memory: MemoryLoader;
 };
 
 export type TurnInput = {
@@ -76,10 +88,25 @@ export async function handleTurn(
     chatConfig.recentTurnLimit,
   );
 
-  // 4. Deterministic assembly with empty memory (M1).
-  const context = assembleContext({ recentTurns });
+  // 4. Bounded memory retrieval (M2). A retrieval failure must not cost the
+  //    person their reply, so the turn degrades to no memory rather than
+  //    failing — the same behaviour a brand-new user already gets.
+  let memory: MemorySections = EMPTY_MEMORY;
+  try {
+    memory = await deps.memory({ userId: input.userId, text: input.text });
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        event: "chat.memory_unavailable",
+        errorName: error instanceof Error ? error.name : "UnknownError",
+      }),
+    );
+  }
 
-  // 5. Open the stream. A rejected key, quota error or connectivity failure
+  // 5. Deterministic assembly.
+  const context = assembleContext({ recentTurns, memory });
+
+  // 6. Open the stream. A rejected key, quota error or connectivity failure
   //    rejects HERE, before any HTTP body has been written, so the route can
   //    still answer with a clean status code.
   const deltas = await deps.llm.streamChat({
@@ -90,7 +117,11 @@ export async function handleTurn(
   return {
     conversationId: conversation.id,
     userMessageId: userMessage.id,
-    stream: persistOnSuccess(deps, conversation.id, deltas),
+    stream: persistOnSuccess(deps, deltas, {
+      userId: input.userId,
+      conversationId: conversation.id,
+      userMessageId: userMessage.id,
+    }),
   };
 }
 
@@ -99,11 +130,17 @@ export async function handleTurn(
  * persists the assistant message only after the stream completes cleanly. A
  * mid-stream failure propagates and writes nothing: a partial answer is never
  * recorded as if it were the assistant's turn.
+ *
+ * The durable ingest job is committed here too, immediately after the
+ * assistant message and BEFORE anything attempts ingestion (R8). On a
+ * serverless runtime, work scheduled after the response may never run at all,
+ * so durability has to be established before the fragile step, not inside its
+ * error handler.
  */
 async function* persistOnSuccess(
   deps: ConversationDeps,
-  conversationId: string,
   deltas: AsyncIterable<string>,
+  turn: { userId: string; conversationId: string; userMessageId: string },
 ): AsyncGenerator<string> {
   let full = "";
   for await (const delta of deltas) {
@@ -113,10 +150,17 @@ async function* persistOnSuccess(
 
   if (full.trim().length === 0) throw new EmptyCompletionError();
 
-  await deps.messages.insert({
-    conversationId,
+  const assistantMessage = await deps.messages.insert({
+    conversationId: turn.conversationId,
     role: "assistant",
     content: full,
+  });
+
+  await deps.jobs.createIngestJob(assistantMessage.id, {
+    conversationId: turn.conversationId,
+    userMessageId: turn.userMessageId,
+    assistantMessageId: assistantMessage.id,
+    userId: turn.userId,
   });
 }
 

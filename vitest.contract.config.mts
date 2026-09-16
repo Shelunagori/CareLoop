@@ -4,14 +4,15 @@ import { defineConfig } from "vitest/config";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 
+/**
+ * Opt-in only: `npm run test:llm-contract`.
+ * Requires OPENAI_API_KEY and network. Never part of `npm test`.
+ */
 export default defineConfig({
   resolve: { alias: { "@": root } },
   test: {
     environment: "node",
-    include: ["tests/**/*.test.ts"],
-    // Contract tests hit the real OpenAI API. Non-deterministic, slow and
-    // costly tests in CI get muted, and a muted test is worse than no test —
-    // so they run only via `npm run test:llm-contract`.
-    exclude: ["tests/contract/**"],
+    include: ["tests/contract/**/*.test.ts"],
+    testTimeout: 120_000,
   },
 });

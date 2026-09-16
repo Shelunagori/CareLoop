@@ -1,4 +1,6 @@
 import type { LlmChatRequest, LlmProvider } from "@/server/adapters/openai/types";
+import type { IngestJobPayload, JobsRepo } from "@/server/repositories/jobs";
+import { EMPTY_MEMORY } from "@/server/services/context";
 import type { ConversationsRepo } from "@/server/repositories/conversations";
 import type { MessagesRepo, StoredMessage } from "@/server/repositories/messages";
 
@@ -47,6 +49,11 @@ export function fakeRepos(options: {
       stored.push(message);
       return message;
     },
+    async findById(id) {
+      options.log.push(`messages.findById:${id}`);
+      return stored.find((m) => m.id === id) ?? null;
+    },
+
     async listRecent(_conversationId, limit) {
       options.log.push(`messages.listRecent:${limit}`);
       lastListRecentLimit = limit;
@@ -94,3 +101,25 @@ export async function drain(stream: AsyncIterable<string>): Promise<string> {
   for await (const chunk of stream) out += chunk;
   return out;
 }
+
+
+/** Minimal jobs repo: records what was created, claims nothing by default. */
+export function fakeJobs(options: { log: CallLog }) {
+  const created: Array<{ key: string; payload: IngestJobPayload }> = [];
+  const repo: JobsRepo = {
+    async createIngestJob(key, payload) {
+      options.log.push(`jobs.createIngestJob:${key}`);
+      // Idempotent on key, like the real unique index.
+      if (!created.some((job) => job.key === key)) created.push({ key, payload });
+    },
+    async claim() {
+      return [];
+    },
+    async complete() {},
+    async fail() {},
+  };
+  return { repo, created };
+}
+
+/** M1 behaviour: a turn with no memory at all. */
+export const emptyMemoryLoader = async () => EMPTY_MEMORY;

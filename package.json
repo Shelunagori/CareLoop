@@ -13,7 +13,8 @@
     "db:reset": "supabase db reset",
     "db:types:local": "supabase gen types typescript --local --schema public > server/db/types.generated.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:llm-contract": "vitest run --config vitest.contract.config.mts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.7",

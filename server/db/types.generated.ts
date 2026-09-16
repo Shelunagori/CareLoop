@@ -315,6 +315,7 @@ export type Database = {
           evidence_count: number
           id: string
           key: string
+          source_conversation_ids: string[]
           source_observation_ids: string[]
           status: Database["public"]["Enums"]["evidence_status"]
           subject_entity_id: string | null
@@ -327,6 +328,7 @@ export type Database = {
           evidence_count?: number
           id?: string
           key: string
+          source_conversation_ids?: string[]
           source_observation_ids?: string[]
           status?: Database["public"]["Enums"]["evidence_status"]
           subject_entity_id?: string | null
@@ -339,6 +341,7 @@ export type Database = {
           evidence_count?: number
           id?: string
           key?: string
+          source_conversation_ids?: string[]
           source_observation_ids?: string[]
           status?: Database["public"]["Enums"]["evidence_status"]
           subject_entity_id?: string | null
@@ -791,6 +794,8 @@ export type Database = {
           kind: string
           label_raw: string | null
           last_confirmed_at: string | null
+          source_conversation_ids: string[]
+          source_observation_ids: string[]
           status: Database["public"]["Enums"]["evidence_status"]
           to_entity_id: string
           user_id: string
@@ -804,6 +809,8 @@ export type Database = {
           kind: string
           label_raw?: string | null
           last_confirmed_at?: string | null
+          source_conversation_ids?: string[]
+          source_observation_ids?: string[]
           status?: Database["public"]["Enums"]["evidence_status"]
           to_entity_id: string
           user_id: string
@@ -817,6 +824,8 @@ export type Database = {
           kind?: string
           label_raw?: string | null
           last_confirmed_at?: string | null
+          source_conversation_ids?: string[]
+          source_observation_ids?: string[]
           status?: Database["public"]["Enums"]["evidence_status"]
           to_entity_id?: string
           user_id?: string
@@ -900,7 +909,37 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      claim_ingest_jobs: {
+        Args: { p_lease_seconds?: number; p_limit?: number }
+        Returns: {
+          attempts: number
+          completed_at: string | null
+          created_at: string
+          id: string
+          key: string
+          kind: Database["public"]["Enums"]["job_kind"]
+          last_error: string | null
+          payload: Json | null
+          run_after: string
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "jobs"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
+      match_episodes: {
+        Args: { p_limit?: number; p_query: string; p_user_id: string }
+        Returns: {
+          id: string
+          occurred_at: string
+          occurred_at_precision: Database["public"]["Enums"]["time_precision"]
+          salience: number
+          similarity: number
+          summary: string
+        }[]
+      }
     }
     Enums: {
       baseline_status: "NO_BASELINE" | "IRREGULAR" | "ACTIVE"

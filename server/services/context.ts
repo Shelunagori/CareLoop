@@ -7,10 +7,9 @@ import { conversationPromptV1 } from "@/server/prompts/conversation.v1";
  * is a pure function over already-fetched rows, so what the model sees is
  * reviewable and testable without a database.
  *
- * M1 supplies EMPTY memory. The sections below are the seam M2 fills; they are
- * declared so the shape is fixed now, and deliberately not rendered, because a
- * half-built renderer for data that cannot exist yet is how "prepared" code
- * rots.
+ * M2 fills profileCard, entityCards and episodes with real retrieved memory.
+ * pendingClosure and draftedOpportunityMarker remain unfilled seams for M4/M5
+ * and are still refused rather than half-rendered.
  */
 export type DraftedOpportunityMarker = {
   entityId: string;
@@ -39,14 +38,44 @@ export const EMPTY_MEMORY: MemorySections = {
   draftedOpportunityMarker: null,
 } as const;
 
-function isEmpty(memory: MemorySections): boolean {
+/** Sections whose renderer does not exist yet (M4/M5). */
+function hasUnimplementedSections(memory: MemorySections): boolean {
+  return memory.pendingClosure !== null || memory.draftedOpportunityMarker !== null;
+}
+
+function hasMemory(memory: MemorySections): boolean {
   return (
-    memory.profileCard === null &&
-    memory.entityCards.length === 0 &&
-    memory.episodes.length === 0 &&
-    memory.pendingClosure === null &&
-    memory.draftedOpportunityMarker === null
+    memory.profileCard !== null ||
+    memory.entityCards.length > 0 ||
+    memory.episodes.length > 0
   );
+}
+
+/**
+ * Curated memory, never raw rows. The framing matters as much as the content:
+ * the companion must treat this as background it already knows, and must not
+ * read anything into it beyond what it says.
+ */
+function renderMemory(memory: MemorySections): string {
+  const blocks: string[] = [
+    "Background you already know about this person. Use it naturally when it",
+    "is relevant, the way a friend would. Do not recite it, do not mention",
+    "that you have notes, and do not infer anything beyond what is written.",
+  ];
+
+  if (memory.profileCard) blocks.push("", memory.profileCard);
+
+  if (memory.entityCards.length > 0) {
+    blocks.push("", "People and pets in their life:");
+    for (const card of memory.entityCards) blocks.push("", card);
+  }
+
+  if (memory.episodes.length > 0) {
+    blocks.push("", "Things they have told you about before:");
+    blocks.push(...memory.episodes);
+  }
+
+  return blocks.join("\n");
 }
 
 export type AssembledContext = {
@@ -60,12 +89,13 @@ export function assembleContext(input: {
 }): AssembledContext {
   const memory = input.memory ?? EMPTY_MEMORY;
 
-  // Fail loudly rather than silently dropping memory a caller supplied. When
-  // M2 adds retrieval it must add rendering in the same change.
-  if (!isEmpty(memory)) {
+  // Fail loudly rather than silently dropping a section whose renderer does
+  // not exist yet. Whoever adds retrieval for these must add rendering in the
+  // same change.
+  if (hasUnimplementedSections(memory)) {
     throw new Error(
-      "assembleContext: memory rendering is not implemented until M2; " +
-        "supplying populated MemorySections would silently drop them.",
+      "assembleContext: pendingClosure and draftedOpportunityMarker are not " +
+        "rendered until M4/M5; supplying them would silently drop them.",
     );
   }
 
@@ -76,11 +106,17 @@ export function assembleContext(input: {
       content: turn.content,
     }));
 
+  // The base prompt is never mutated. Memory is appended as a second system
+  // message so an empty-memory turn is byte-identical to M1.
+  const system: LlmMessage[] = [
+    { role: "system", content: conversationPromptV1.system },
+  ];
+  if (hasMemory(memory)) {
+    system.push({ role: "system", content: renderMemory(memory) });
+  }
+
   return {
     promptRef: conversationPromptV1.ref,
-    messages: [
-      { role: "system", content: conversationPromptV1.system },
-      ...turns,
-    ],
+    messages: [...system, ...turns],
   };
 }

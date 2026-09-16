@@ -5,7 +5,7 @@ import {
   ConversationNotFoundError,
   handleTurn,
 } from "@/server/services/conversation";
-import { drain, fakeLlm, fakeRepos, type CallLog } from "./fakes";
+import { drain, emptyMemoryLoader, fakeJobs, fakeLlm, fakeRepos, type CallLog } from "./fakes";
 
 const USER = "user-a";
 const OTHER_USERS_CONVERSATION = "conv-owned-by-someone-else";
@@ -16,7 +16,14 @@ function setup(options: Parameters<typeof fakeLlm>[0] & {
   const log: CallLog = [];
   const repos = fakeRepos({ log, ownedConversationIds: options.ownedConversationIds });
   const llm = fakeLlm({ ...options, log });
-  return { log, repos, llm, deps: { ...repos, llm } };
+  const jobs = fakeJobs({ log });
+  return {
+    log,
+    repos,
+    llm,
+    jobs,
+    deps: { ...repos, llm, jobs: jobs.repo, memory: emptyMemoryLoader },
+  };
 }
 
 describe("handleTurn", () => {
@@ -125,8 +132,11 @@ describe("handleTurn", () => {
 
     const log: CallLog = [];
     const repos = fakeRepos({ log });
+    const jobs = fakeJobs({ log });
     const deps = {
       ...repos,
+      jobs: jobs.repo,
+      memory: emptyMemoryLoader,
       llm: {
         async streamChat() {
           return (async function* () {

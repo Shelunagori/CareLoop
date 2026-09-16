@@ -1,11 +1,13 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 import { getCurrentUserId } from "@/server/auth/current-user";
 import { ChatRequestSchema } from "@/server/services/chat-request";
 import {
   ConversationNotFoundError,
   handleTurn,
 } from "@/server/services/conversation";
-import { createConversationDeps } from "@/server/services/deps";
+import { createConversationDeps, createIngestionDeps } from "@/server/services/deps";
+import { ingestionConfig } from "@/server/config";
+import { runIngestionSweep } from "@/server/services/ingestion";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -71,6 +73,28 @@ export async function POST(request: Request) {
         controller.error(error);
       }
     },
+  });
+
+  // Post-turn work runs AFTER the response is fully sent, so extraction never
+  // delays a single token of the person's reply. The durable job row was
+  // already committed alongside the assistant message, so if this instance is
+  // reclaimed before or during the sweep, the row simply stays pending and a
+  // later request picks it up (R8).
+  after(async () => {
+    try {
+      await runIngestionSweep(createIngestionDeps(), {
+        // This turn's job plus a small bounded drain of anything left behind.
+        limit: ingestionConfig.drainLimit + 1,
+      });
+    } catch (error) {
+      // Ingestion is never allowed to affect the conversation.
+      console.error(
+        JSON.stringify({
+          event: "ingest.sweep_failed",
+          errorName: error instanceof Error ? error.name : "UnknownError",
+        }),
+      );
+    }
   });
 
   return new Response(stream, {

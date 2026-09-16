@@ -1,7 +1,7 @@
 import "server-only";
-import { createHash } from "node:crypto";
 import OpenAI from "openai";
 import { chatModel } from "@/server/config";
+import { errorName, hashText, logProviderCall } from "./log";
 import type { LlmChatRequest, LlmMessage, LlmProvider } from "./types";
 
 /**
@@ -29,18 +29,12 @@ type LlmLogRecord = {
   errorName?: string;
 };
 
-/**
- * Structured, single-line, and deliberately content-free: prompt and
- * completion text never reach ordinary logs. The hash is enough to correlate
- * a complaint with a call without retaining what was said.
- */
 function logLlmCall(record: LlmLogRecord): void {
-  console.log(JSON.stringify(record));
+  logProviderCall(record);
 }
 
 function hashMessages(messages: LlmMessage[]): string {
-  const canonical = messages.map((m) => `${m.role}:${m.content}`).join("\n");
-  return createHash("sha256").update(canonical).digest("hex").slice(0, 16);
+  return hashText(messages.map((m) => `${m.role}:${m.content}`).join("\n"));
 }
 
 function apiKey(): string {
@@ -79,7 +73,7 @@ export function createOpenAiLlm(): LlmProvider {
           ...base,
           outcome: "request_failed",
           latencyMs: Date.now() - startedAt,
-          errorName: error instanceof Error ? error.name : "UnknownError",
+          errorName: errorName(error),
         });
         throw error;
       }
@@ -113,7 +107,7 @@ export function createOpenAiLlm(): LlmProvider {
             ttftMs,
             outputChars,
             usage,
-            errorName: error instanceof Error ? error.name : "UnknownError",
+            errorName: errorName(error),
           });
           throw error;
         }

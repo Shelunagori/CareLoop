@@ -28,3 +28,37 @@ export interface LlmProvider {
    */
   streamChat(request: LlmChatRequest): Promise<AsyncIterable<string>>;
 }
+
+/**
+ * Extraction (M2). A separate port from LlmProvider on purpose: the
+ * conversational path must not be able to reach the extraction model, and the
+ * conversation service's tests should not have to stub a capability it never
+ * calls. docs/01 §1.3 sketches both on one interface; splitting them keeps the
+ * hot path's dependencies honest.
+ */
+export type ExtractionRequest = {
+  promptRef: string;
+  system: string;
+  user: string;
+  /** Name of the strict JSON schema the provider must satisfy. */
+  schemaName: string;
+  jsonSchema: unknown;
+};
+
+export type ExtractionResponse = {
+  /** Unvalidated provider output. The caller runs it through zod. */
+  raw: unknown;
+  model: string;
+};
+
+export interface ExtractionProvider {
+  extract(request: ExtractionRequest): Promise<ExtractionResponse>;
+}
+
+/**
+ * Embeddings (M2). Used by exactly one caller, for exactly one column:
+ * episodes.embedding (D5/R2).
+ */
+export interface EmbeddingProvider {
+  embed(texts: readonly string[]): Promise<number[][]>;
+}
