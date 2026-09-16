@@ -11,24 +11,30 @@
     "db:types": "supabase gen types typescript --linked --schema public > server/db/types.generated.ts",
     "db:start": "supabase start",
     "db:reset": "supabase db reset",
-    "db:types:local": "supabase gen types typescript --local --schema public > server/db/types.generated.ts"
+    "db:types:local": "supabase gen types typescript --local --schema public > server/db/types.generated.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
+    "@supabase/ssr": "^0.12.7",
     "@supabase/supabase-js": "^2.116.0",
     "next": "16.3.5",
+    "openai": "^7.15.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",
-    "server-only": "^0.0.1"
+    "server-only": "^0.0.1",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
+    "@types/node": "^22.20.3",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.3.5",
     "supabase": "^2.117.0",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^5.0.1"
   }
 }
