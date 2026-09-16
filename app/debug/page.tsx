@@ -3,8 +3,10 @@ import { isDebugSurfaceEnabled } from "@/server/config";
 import { getCurrentUserId } from "@/server/auth/current-user";
 import { loadBaselineDerivations } from "@/server/services/baseline-debug";
 import { loadDetectionDebug } from "@/server/services/detection-debug";
+import { loadConsentDebug } from "@/server/services/consent-debug";
 import {
   createBaselineDebugDeps,
+  createConsentDebugDeps,
   createDetectionDebugDeps,
 } from "@/server/services/deps";
 
@@ -32,9 +34,10 @@ export default async function DebugPage() {
   }
 
   const now = new Date();
-  const [derivations, signals] = await Promise.all([
+  const [derivations, signals, consent] = await Promise.all([
     loadBaselineDerivations(createBaselineDebugDeps(), { userId, now }),
     loadDetectionDebug(createDetectionDebugDeps(), { userId, now }),
+    loadConsentDebug(createConsentDebugDeps(), { userId, now }),
   ]);
 
   return (
@@ -239,6 +242,141 @@ export default async function DebugPage() {
                     : s.opportunity.fallbackUsed
                       ? "yes (deterministic template)"
                       : "no (renderer output passed the guard)"}
+                </dd>
+              </dl>
+            )}
+          </article>
+        ))}
+      </section>
+
+      <section className="space-y-4 border-t-4 pt-6">
+        <header className="font-sans">
+          <h2 className="text-base font-semibold">Consent &amp; family loop (M5)</h2>
+          <p className="text-neutral-600">
+            The chain of custody, recomputed rather than restated: shown &rarr;
+            approved &rarr; sent. No token is ever displayed here.
+          </p>
+        </header>
+
+        {consent.length === 0 && (
+          <p className="font-sans text-neutral-500">No opportunities yet.</p>
+        )}
+
+        {consent.map((row) => (
+          <article key={row.opportunityId} className="space-y-2 border-t pt-4">
+            <h3 className="font-sans text-base font-semibold">
+              {row.entityName}{" "}
+              <span
+                className={
+                  row.status === "consumed"
+                    ? "text-green-700"
+                    : row.status === "declined" || row.status === "expired"
+                      ? "text-neutral-500"
+                      : "text-amber-700"
+                }
+              >
+                {row.status}
+              </span>
+            </h3>
+
+            <dl className="grid grid-cols-[13rem_1fr] gap-x-4 gap-y-1">
+              <dt>offered / resolved</dt>
+              <dd>
+                {row.offeredAt ?? "\u2014"} / {row.resolvedAt ?? "\u2014"}
+              </dd>
+              <dt>offerable until</dt>
+              <dd>
+                {row.expiresAt} {row.expired && <span className="text-red-700">(past)</span>}
+              </dd>
+              <dt>rendered text</dt>
+              <dd className="whitespace-pre-wrap">{row.renderedText ?? "\u2014"}</dd>
+              <dt>rendered text hash</dt>
+              <dd className="break-all">{row.renderedTextHash ?? "\u2014"}</dd>
+            </dl>
+
+            {row.grant === null ? (
+              <p className="font-sans text-neutral-500">No consent grant.</p>
+            ) : (
+              <dl className="grid grid-cols-[13rem_1fr] gap-x-4 gap-y-1 border-l-2 pl-4">
+                <dt>grant</dt>
+                <dd>
+                  {row.grant.id} &mdash;{" "}
+                  <span className="font-semibold">{row.grant.state}</span>
+                </dd>
+                <dt>granted / expires</dt>
+                <dd>
+                  {row.grant.grantedAt} &rarr; {row.grant.expiresAt}
+                </dd>
+                <dt>used / revoked</dt>
+                <dd>
+                  {row.grant.usedAt ?? "\u2014"} / {row.grant.revokedAt ?? "\u2014"}
+                </dd>
+                <dt>scope</dt>
+                <dd className="whitespace-pre-wrap break-all">
+                  {JSON.stringify(row.grant.scope)}
+                </dd>
+                <dt>snapshot hash recomputes</dt>
+                <dd className={row.grant.snapshotHashRecomputes ? "" : "text-red-700"}>
+                  {row.grant.snapshotHashRecomputes ? "yes" : "NO"}
+                </dd>
+                <dt>approved == stored draft</dt>
+                <dd className={row.grant.matchesOpportunityText ? "" : "text-red-700"}>
+                  {row.grant.matchesOpportunityText ? "yes" : "NO"}
+                </dd>
+                <dt>payload snapshot matches</dt>
+                <dd className={row.grant.matchesOpportunityPayload ? "" : "text-red-700"}>
+                  {row.grant.matchesOpportunityPayload ? "yes" : "NO"}
+                </dd>
+              </dl>
+            )}
+
+            {row.request !== null && (
+              <dl className="grid grid-cols-[13rem_1fr] gap-x-4 gap-y-1 border-l-2 pl-4">
+                <dt>family request</dt>
+                <dd>
+                  {row.request.id} &mdash;{" "}
+                  <span className="font-semibold">{row.request.status}</span>
+                </dd>
+                <dt>sent == approved bytes</dt>
+                <dd className={row.request.bodyMatchesGrant ? "" : "text-red-700"}>
+                  {row.request.bodyMatchesGrant ? "yes" : "NO"}
+                </dd>
+                <dt>delivered / opened</dt>
+                <dd>
+                  {row.request.deliveredAt ?? "\u2014"} / {row.request.openedAt ?? "\u2014"}
+                </dd>
+                <dt>attempts / last error</dt>
+                <dd>
+                  {row.request.deliveryAttempts} / {row.request.lastDeliveryError ?? "\u2014"}
+                </dd>
+                <dt>token window</dt>
+                <dd>
+                  until {row.request.tokenExpiresAt}{" "}
+                  {row.request.tokenExpired && <span className="text-red-700">(past)</span>}
+                </dd>
+                <dt>token hash prefix</dt>
+                <dd>
+                  {row.request.tokenHashPrefix}&hellip;{" "}
+                  <span className="font-sans text-xs text-neutral-500">
+                    the token itself exists only in the family member&rsquo;s link
+                  </span>
+                </dd>
+              </dl>
+            )}
+
+            {row.response !== null && (
+              <dl className="grid grid-cols-[13rem_1fr] gap-x-4 gap-y-1 border-l-2 pl-4">
+                <dt>family response</dt>
+                <dd>{row.response.receivedAt}</dd>
+                <dt>parsed</dt>
+                <dd className="whitespace-pre-wrap break-all">
+                  {JSON.stringify(row.response.parsed)}
+                </dd>
+                <dt>closure</dt>
+                <dd>
+                  {row.closure
+                    ? `${row.closure.id} — surfaced ${row.closure.surfacedAt ?? "not yet"}`
+                    : "\u2014"}
                 </dd>
               </dl>
             )}

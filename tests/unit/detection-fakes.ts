@@ -233,6 +233,9 @@ export function fakeReconnectDeps(input: {
       async findById(id) {
         return store.opportunities.find((o) => o.id === id) ?? null;
       },
+      async findOwnedById(id, userId) {
+        return store.opportunities.find((o) => o.id === id && o.userId === userId) ?? null;
+      },
       async findBySignal(signalId) {
         return store.opportunities.find((o) => o.signalId === signalId) ?? null;
       },
@@ -258,6 +261,36 @@ export function fakeReconnectDeps(input: {
         row.status = "drafted";
         store.calls.push("opportunities.saveDraft");
         return row;
+      },
+      async markOffered({ id, now }) {
+        const row = store.opportunities.find((o) => o.id === id);
+        // Conditional, exactly like the real UPDATE ... WHERE.
+        if (!row || row.status !== "drafted" || row.expiresAt <= now) return null;
+        row.status = "offered";
+        row.offeredAt = now;
+        store.calls.push("opportunities.markOffered");
+        return row;
+      },
+      async markApproved({ id, now }) {
+        const row = store.opportunities.find((o) => o.id === id);
+        if (!row || row.status !== "offered" || row.expiresAt <= now) return null;
+        row.status = "approved";
+        store.calls.push("opportunities.markApproved");
+        return row;
+      },
+      async markDeclined({ id, now }) {
+        const row = store.opportunities.find((o) => o.id === id);
+        if (!row || row.status !== "offered") return null;
+        row.status = "declined";
+        row.resolvedAt = now;
+        store.calls.push("opportunities.markDeclined");
+        return row;
+      },
+      async listByStatusForUser(userId, statuses, limit) {
+        return store.opportunities
+          .filter((o) => o.userId === userId && statuses.includes(o.status))
+          .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+          .slice(0, limit);
       },
       async markExpired(id, now) {
         const row = store.opportunities.find((o) => o.id === id);

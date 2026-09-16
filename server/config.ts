@@ -153,3 +153,33 @@ export const detectionSweepConfig = {
   /** Confirmed related entities that may be mentioned outbound. */
   maxRelatedEntities: 1,
 } as const;
+
+/**
+ * M5 family loop. The base URL is where the capability link points; it must be
+ * reachable by the family member, which localhost is not once this is
+ * deployed, so it is configuration rather than a derived value.
+ */
+export function publicBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
+  return env.CARELOOP_PUBLIC_BASE_URL ?? "http://localhost:3000";
+}
+
+export const familyConfig = {
+  /**
+   * The POC channel. A real adapter (email, SMS, WhatsApp) slots in behind the
+   * same Notifier port without touching anything above it.
+   */
+  devChannel: "dev",
+  respondPath: "/family/respond",
+  /** Closures surfaced to the older adult per turn. One is enough. */
+  maxClosuresPerTurn: 1,
+  /**
+   * How many overdue family requests one opportunistic sweep may retire.
+   * Bounded because it runs on a request path: a backlog drains over several
+   * turns rather than making one turn pay for all of it.
+   */
+  expirySweepLimit: 20,
+} as const;
+
+export function familyRespondUrl(token: string, env: NodeJS.ProcessEnv = process.env): string {
+  return `${publicBaseUrl(env)}${familyConfig.respondPath}/${token}`;
+}

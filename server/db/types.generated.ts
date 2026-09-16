@@ -929,6 +929,20 @@ export type Database = {
           isSetofReturn: true
         }
       }
+      create_authorized_family_request: {
+        Args: {
+          p_access_token_hash: string
+          p_contact_id: string
+          p_now?: string
+          p_opportunity_id: string
+          p_payload: Json
+          p_rendered_body: string
+          p_rendered_body_hash: string
+          p_token_expires_at: string
+          p_user_id: string
+        }
+        Returns: Json
+      }
       match_episodes: {
         Args: { p_limit?: number; p_query: string; p_user_id: string }
         Returns: {
@@ -948,6 +962,15 @@ export type Database = {
           p_proposal: Json
           p_signal_id: string
           p_user_id: string
+        }
+        Returns: Json
+      }
+      record_family_response: {
+        Args: {
+          p_now?: string
+          p_parsed: Json
+          p_raw_body: string
+          p_request_id: string
         }
         Returns: Json
       }

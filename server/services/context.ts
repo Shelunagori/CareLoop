@@ -1,3 +1,4 @@
+import type { ClosureMarker } from "@/core/family/closure";
 import type { LlmMessage } from "@/server/adapters/openai/types";
 import type { StoredMessage } from "@/server/repositories/messages";
 import { conversationPromptV1 } from "@/server/prompts/conversation.v1";
@@ -8,8 +9,9 @@ import { conversationPromptV1 } from "@/server/prompts/conversation.v1";
  * reviewable and testable without a database.
  *
  * M2 fills profileCard, entityCards and episodes with real retrieved memory.
- * pendingClosure and draftedOpportunityMarker remain unfilled seams for M4/M5
- * and are still refused rather than half-rendered.
+ * M5 fills the last two, and both are deliberately THIN: a closure marker and
+ * a drafted-opportunity marker, never the family member's words and never the
+ * outbound draft.
  */
 export type DraftedOpportunityMarker = {
   entityId: string;
@@ -24,9 +26,13 @@ export type MemorySections = {
   entityCards: readonly string[];
   /** M2: top-k hybrid-scored episodes. */
   episodes: readonly string[];
-  /** M5: an outstanding promise that must be surfaced. */
-  pendingClosure: string | null;
-  /** F1: marker ONLY. Never rendered_text, never the SharePayload. */
+  /**
+   * M5: a family member has replied and the companion is about to say so.
+   * A marker, not the reply text — the application states the news itself, in
+   * a deterministic factual sentence.
+   */
+  pendingClosure: ClosureMarker | null;
+  /** F1/E1: marker ONLY. Never rendered_text, never the SharePayload. */
   draftedOpportunityMarker: DraftedOpportunityMarker | null;
 };
 
@@ -38,17 +44,61 @@ export const EMPTY_MEMORY: MemorySections = {
   draftedOpportunityMarker: null,
 } as const;
 
-/** Sections whose renderer does not exist yet (M4/M5). */
-function hasUnimplementedSections(memory: MemorySections): boolean {
-  return memory.pendingClosure !== null || memory.draftedOpportunityMarker !== null;
-}
-
 function hasMemory(memory: MemorySections): boolean {
   return (
     memory.profileCard !== null ||
     memory.entityCards.length > 0 ||
-    memory.episodes.length > 0
+    memory.episodes.length > 0 ||
+    memory.pendingClosure !== null ||
+    memory.draftedOpportunityMarker !== null
   );
+}
+
+/**
+ * The closure marker (this milestone's section 23).
+ *
+ * Four fields: who replied, what they answered, and when. Not their sentence,
+ * not the request, not the draft. The companion is told the news has ALREADY
+ * been stated by the application, so it neither repeats it nor embroiders it.
+ */
+function renderClosure(marker: ClosureMarker): string[] {
+  const answer =
+    marker.response === "yes"
+      ? "said yes"
+      : marker.response === "no"
+        ? "said not this time"
+        : marker.response === "unsure"
+          ? "said they are not sure yet"
+          : "replied";
+  const when = marker.timeframe ? ` (${marker.timeframe})` : "";
+  return [
+    "",
+    `${marker.entityName} has replied to the message you sent, and ${answer}${when}.`,
+    "You have ALREADY told them this, in the first line of your reply. Do not",
+    "repeat it, do not add detail, and do not guess how anyone feels about it.",
+    "Simply respond warmly to whatever they say about it.",
+  ];
+}
+
+/**
+ * The drafted-opportunity marker (E1, docs/05 section 14.4).
+ *
+ * The model's job at this point is to judge the moment and optionally write a
+ * lead-in sentence — neither of which needs the message body. Handing it the
+ * body would create the possibility of paraphrase in the one place where
+ * paraphrase breaks consent. Withholding it removes that possibility at every
+ * temperature and under any injection in the person's own speech, which an
+ * instruction cannot do.
+ */
+function renderDraftedMarker(marker: DraftedOpportunityMarker): string[] {
+  return [
+    "",
+    `There is a message ready to send to ${marker.entityName}, waiting to be offered.`,
+    "It will be shown to them word for word by the app, immediately after your",
+    "reply. You have NOT been given its wording and must not invent, quote,",
+    "summarize or promise anything about what it says. At most, write one short",
+    "natural sentence leading into it.",
+  ];
 }
 
 /**
@@ -75,6 +125,11 @@ function renderMemory(memory: MemorySections): string {
     blocks.push(...memory.episodes);
   }
 
+  if (memory.pendingClosure) blocks.push(...renderClosure(memory.pendingClosure));
+  if (memory.draftedOpportunityMarker) {
+    blocks.push(...renderDraftedMarker(memory.draftedOpportunityMarker));
+  }
+
   return blocks.join("\n");
 }
 
@@ -88,16 +143,6 @@ export function assembleContext(input: {
   memory?: MemorySections;
 }): AssembledContext {
   const memory = input.memory ?? EMPTY_MEMORY;
-
-  // Fail loudly rather than silently dropping a section whose renderer does
-  // not exist yet. Whoever adds retrieval for these must add rendering in the
-  // same change.
-  if (hasUnimplementedSections(memory)) {
-    throw new Error(
-      "assembleContext: pendingClosure and draftedOpportunityMarker are not " +
-        "rendered until M4/M5; supplying them would silently drop them.",
-    );
-  }
 
   const turns: LlmMessage[] = input.recentTurns
     .filter((turn) => turn.role !== "system")

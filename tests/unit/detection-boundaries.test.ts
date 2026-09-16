@@ -6,6 +6,22 @@ import { assembleContext, EMPTY_MEMORY } from "@/server/services/context";
 const read = (path: string) => readFileSync(path, "utf8");
 
 /**
+ * The body of one method, bounded at the next method.
+ *
+ * A fixed-size window is not good enough: it runs past the closing brace into
+ * the NEXT method, so an assertion about `markApproved` could be satisfied by
+ * a predicate belonging to `markDeclined`. That is how a guard quietly stops
+ * guarding, and mutation testing is what found it.
+ */
+function methodBody(source: string, method: string): string {
+  const start = source.indexOf(`async ${method}(`);
+  if (start < 0) throw new Error(`method ${method} not found`);
+  const end = source.indexOf("\n    },", start);
+  if (end < 0) throw new Error(`end of ${method} not found`);
+  return source.slice(start, end);
+}
+
+/**
  * Boundaries M4 must not cross. Several are source-level assertions, which is
  * deliberate: "detection runs after the response" and "the draft never reaches
  * the conversational model" are properties of WHERE code is called from, and a
@@ -62,16 +78,24 @@ describe("2. the conversational model is never given the draft", () => {
     }
   });
 
-  it("M4 does not wire the marker: context still refuses one", () => {
-    expect(() =>
-      assembleContext({
-        recentTurns: [],
-        memory: {
-          ...EMPTY_MEMORY,
-          draftedOpportunityMarker: { entityId: "e1", entityName: "John", status: "drafted" },
-        },
-      }),
-    ).toThrow();
+  it("the marker carries a name and a status, and never the bytes (M5)", () => {
+    // M5 wires it. What it may carry is still exactly three fields, and the
+    // rendered context proves the draft is not among them.
+    const context = assembleContext({
+      recentTurns: [],
+      memory: {
+        ...EMPTY_MEMORY,
+        draftedOpportunityMarker: { entityId: "e1", entityName: "John", status: "drafted" },
+      },
+    });
+    const serialized = JSON.stringify(context);
+    expect(serialized).toContain("John");
+    for (const leak of [
+      "rendered_text", "renderedText", "rendered_text_hash", "sharePayload",
+      "ask_if_visiting", "fromDisplayName",
+    ]) {
+      expect(serialized).not.toContain(leak);
+    }
   });
 });
 
@@ -119,24 +143,35 @@ describe("3. the development detection endpoint is gated exactly like the seeder
   });
 });
 
-describe("4. M5 belongs to M5", () => {
+describe("4. detection stops at `drafted`", () => {
   const reconnect = read("server/services/reconnect.ts");
 
-  it("nothing in M4 creates consent, family requests, tokens or closures", () => {
+  it("detection creates no consent, family request, token or closure", () => {
+    // These are M5's, and they stay out of the detection service: a change to
+    // sending must not be able to ripple into what gets detected.
     for (const forbidden of [
-      "consent_grants", "consentGrant", "family_requests\"", "access_token",
-      "magic", "notifier", "closure",
+      "consent_grants", "consentGrant", "access_token",
+      "notifier", "Notifier", "closure", "Closure",
     ]) {
       expect(reconnect).not.toContain(forbidden);
     }
   });
 
-  it("no status past `drafted` is ever written", () => {
+  it("detection never writes a status past `drafted`", () => {
     for (const forbidden of ['"offered"', '"approved"', '"consumed"', '"declined"']) {
       // They appear in reads (open/terminal partitions) but are never assigned.
       expect(reconnect).not.toContain(`status: ${forbidden}`);
     }
-    expect(read("server/repositories/opportunities.ts")).not.toMatch(/status: "(offered|approved|consumed|declined)"/);
+    // The repository DOES own those transitions now (M5), but each is a
+    // separate, conditional method — never an unguarded assignment.
+    const repo = read("server/repositories/opportunities.ts");
+    for (const [method, from] of [
+      ["markOffered", "drafted"],
+      ["markApproved", "offered"],
+      ["markDeclined", "offered"],
+    ] as const) {
+      expect(methodBody(repo, method), method).toContain(`.eq("status", "${from}")`);
+    }
   });
 
   it("the migration is additive and creates no table or column", () => {

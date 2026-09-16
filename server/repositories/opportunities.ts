@@ -88,6 +88,8 @@ export type OpportunitiesRepo = {
     now: string;
   }): Promise<MaterializeResult>;
   findById(id: string): Promise<OpportunityRecord | null>;
+  /** Ownership is part of the WHERE clause, never a check after the fetch. */
+  findOwnedById(id: string, userId: string): Promise<OpportunityRecord | null>;
   findBySignal(signalId: string): Promise<OpportunityRecord | null>;
   listOpenForUser(userId: string, limit: number): Promise<OpportunityRecord[]>;
   /** Bounded window over resolved/offered history, for suppression + debug. */
@@ -110,6 +112,23 @@ export type OpportunitiesRepo = {
   }): Promise<OpportunityRecord | null>;
   /** Terminal, conditional on the row being pre-approval. Never extends. */
   markExpired(id: string, now: string): Promise<void>;
+
+  /* --- M5 transitions. Each is a CONDITIONAL update, which is what makes two
+     concurrent chat requests unable to offer, approve or decline twice. The
+     loser gets null and reloads; it never writes a second time. --- */
+
+  /** drafted -> offered, only while still offerable. */
+  markOffered(input: { id: string; now: string }): Promise<OpportunityRecord | null>;
+  /** offered -> approved, only while still offerable. */
+  markApproved(input: { id: string; now: string }): Promise<OpportunityRecord | null>;
+  /** offered -> declined. Terminal; feeds the M4 decline cooldowns. */
+  markDeclined(input: { id: string; now: string }): Promise<OpportunityRecord | null>;
+  /** The single opportunity awaiting a yes or no, if there is one. */
+  listByStatusForUser(
+    userId: string,
+    statuses: readonly OpportunityStatus[],
+    limit: number,
+  ): Promise<OpportunityRecord[]>;
 };
 
 const SELECT =
@@ -181,6 +200,17 @@ export function opportunitiesRepo(db: Db): OpportunitiesRepo {
       return data ? toRecord(data) : null;
     },
 
+    async findOwnedById(id, userId) {
+      const { data, error } = await db
+        .from("reconnect_opportunities")
+        .select(SELECT)
+        .eq("id", id)
+        .eq("user_id", userId)
+        .maybeSingle();
+      if (error) throw new Error(`findOwnedOpportunity failed: ${error.message}`);
+      return data ? toRecord(data) : null;
+    },
+
     async findBySignal(signalId) {
       const { data, error } = await db
         .from("reconnect_opportunities")
@@ -245,6 +275,58 @@ export function opportunitiesRepo(db: Db): OpportunitiesRepo {
         .in("status", ["proposed", "drafted", "offered"])
         .lte("expires_at", now);
       if (error) throw new Error(`markOpportunityExpired failed: ${error.message}`);
+    },
+
+    async markOffered({ id, now }) {
+      const { data, error } = await db
+        .from("reconnect_opportunities")
+        .update({ status: "offered", offered_at: now })
+        .eq("id", id)
+        .eq("status", "drafted")
+        // An opportunity past its window is not offerable, and the offer must
+        // not be the thing that revives it.
+        .gt("expires_at", now)
+        .select(SELECT)
+        .maybeSingle();
+      if (error) throw new Error(`markOffered failed: ${error.message}`);
+      return data ? toRecord(data) : null;
+    },
+
+    async markApproved({ id, now }) {
+      const { data, error } = await db
+        .from("reconnect_opportunities")
+        .update({ status: "approved" })
+        .eq("id", id)
+        .eq("status", "offered")
+        .gt("expires_at", now)
+        .select(SELECT)
+        .maybeSingle();
+      if (error) throw new Error(`markApproved failed: ${error.message}`);
+      return data ? toRecord(data) : null;
+    },
+
+    async markDeclined({ id, now }) {
+      const { data, error } = await db
+        .from("reconnect_opportunities")
+        .update({ status: "declined", resolved_at: now })
+        .eq("id", id)
+        .eq("status", "offered")
+        .select(SELECT)
+        .maybeSingle();
+      if (error) throw new Error(`markDeclined failed: ${error.message}`);
+      return data ? toRecord(data) : null;
+    },
+
+    async listByStatusForUser(userId, statuses, limit) {
+      const { data, error } = await db
+        .from("reconnect_opportunities")
+        .select(SELECT)
+        .eq("user_id", userId)
+        .in("status", [...statuses])
+        .order("created_at", { ascending: false })
+        .limit(limit);
+      if (error) throw new Error(`listOpportunitiesByStatus failed: ${error.message}`);
+      return (data ?? []).map(toRecord);
     },
   };
 }

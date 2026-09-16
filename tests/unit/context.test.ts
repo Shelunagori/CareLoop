@@ -67,22 +67,44 @@ describe("assembleContext", () => {
     expect(context.messages[2]).toEqual({ role: "user", content: "hi" });
   });
 
-  it("still refuses sections whose renderer does not exist yet (M4/M5)", () => {
-    expect(() =>
-      assembleContext({
-        recentTurns: [],
-        memory: { ...EMPTY_MEMORY, pendingClosure: "John says Sunday" },
-      }),
-    ).toThrow(/not rendered until M4\/M5/);
-
-    expect(() =>
-      assembleContext({
-        recentTurns: [],
-        memory: {
-          ...EMPTY_MEMORY,
-          draftedOpportunityMarker: { entityId: "e1", entityName: "John", status: "drafted" },
+  it("renders a closure as a marker, never the family member's words (M5)", () => {
+    const context = assembleContext({
+      recentTurns: [],
+      memory: {
+        ...EMPTY_MEMORY,
+        pendingClosure: {
+          type: "family_response",
+          entityName: "John",
+          response: "yes",
+          timeframe: "this weekend",
         },
-      }),
-    ).toThrow(/not rendered until M4\/M5/);
+      },
+    });
+    const serialized = JSON.stringify(context);
+    expect(serialized).toContain("John");
+    expect(serialized).toContain("this weekend");
+    // The model is told the news was already stated, so it neither repeats nor
+    // embroiders it.
+    expect(serialized).toContain("ALREADY told them this");
+    expect(serialized).toContain("do not guess how anyone feels");
+  });
+
+  it("renders a drafted opportunity as a marker and nothing more (E1)", () => {
+    const context = assembleContext({
+      recentTurns: [],
+      memory: {
+        ...EMPTY_MEMORY,
+        draftedOpportunityMarker: { entityId: "e1", entityName: "John", status: "drafted" },
+      },
+    });
+    const serialized = JSON.stringify(context);
+    expect(serialized).toContain("John");
+    expect(serialized).toContain("word for word");
+    // The three things the marker must never carry.
+    for (const leak of ["rendered_text", "renderedText", "sharePayload", "ask_if_visiting"]) {
+      expect(serialized).not.toContain(leak);
+    }
+    // And the entity id is not needed by the model either.
+    expect(serialized).not.toContain("e1");
   });
 });

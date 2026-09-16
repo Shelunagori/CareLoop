@@ -7,12 +7,17 @@ import {
 } from "@/server/services/conversation";
 import {
   createConversationDeps,
+  createFamilySendDeps,
   createIngestionDeps,
   createReconnectDeps,
 } from "@/server/services/deps";
 import { ingestionConfig } from "@/server/config";
 import { runIngestionSweep } from "@/server/services/ingestion";
 import { runDetectionSweep } from "@/server/services/reconnect";
+import {
+  expireOverdueFamilyRequests,
+  sendApprovedOpportunity,
+} from "@/server/services/family-send";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -86,6 +91,50 @@ export async function POST(request: Request) {
   // reclaimed before or during the sweep, the row simply stays pending and a
   // later request picks it up (R8).
   after(async () => {
+    // M5, the outbound leg. FIRST in the after-response path, because the
+    // person has just said yes and the message going out is the thing they are
+    // waiting on - but still after the response is flushed, so a notifier
+    // outage can never cost them their reply.
+    //
+    // ZERO model calls happen in here. The bytes were rendered, guarded,
+    // stored, hashed and shown before the approval; sending is a byte copy.
+    if (turn.pendingSendOpportunityId !== null) {
+      try {
+        await sendApprovedOpportunity(createFamilySendDeps(), {
+          userId,
+          opportunityId: turn.pendingSendOpportunityId,
+        });
+      } catch (error) {
+        // The obligation is durable (E3): the request row, the spent grant and
+        // the consumed opportunity are already committed. This failure is
+        // transport, so the row stays `pending` and a later turn retries the
+        // same bytes. The person is never asked to approve anything twice.
+        console.error(
+          JSON.stringify({
+            event: "family.send_failed",
+            opportunityId: turn.pendingSendOpportunityId,
+            errorName: error instanceof Error ? error.name : "UnknownError",
+          }),
+        );
+      }
+    }
+
+    // The lazy half of the family-request lifecycle. A request whose read
+    // window has closed stops being outstanding the moment the clock says so,
+    // but the ROW has to learn that too - otherwise it suppresses reconnects
+    // about that person forever. This is the bounded sweep that retires them,
+    // on a path that is already running and already after the response.
+    try {
+      await expireOverdueFamilyRequests(createFamilySendDeps(), { userId });
+    } catch (error) {
+      console.error(
+        JSON.stringify({
+          event: "family.expiry_sweep_failed",
+          errorName: error instanceof Error ? error.name : "UnknownError",
+        }),
+      );
+    }
+
     try {
       await runIngestionSweep(createIngestionDeps(), {
         // This turn's job plus a small bounded drain of anything left behind.

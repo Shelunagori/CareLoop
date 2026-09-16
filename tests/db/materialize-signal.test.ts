@@ -69,12 +69,13 @@ beforeAll(async () => {
 });
 
 describe("0. the migrations apply, in order, on a clean database", () => {
-  it("applies all four", () => {
+  it("applies every migration, in order", () => {
     expect(h.appliedMigrations).toEqual([
       "20260916120000_init_schema.sql",
       "20260916120100_rls.sql",
       "20260916130000_m2_ingestion_support.sql",
       "20260916140000_m4_materialize_signal.sql",
+      "20260916150000_m5_consent_and_family.sql",
     ]);
   });
 });

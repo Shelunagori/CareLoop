@@ -4,7 +4,7 @@ import type { FamilyRenderProvider } from "@/server/adapters/openai/types";
 import type { BaselinesRepo } from "@/server/repositories/baselines";
 import type { ConversationsRepo } from "@/server/repositories/conversations";
 import type { EntitiesRepo, EntityRecord } from "@/server/repositories/entities";
-import type { FamilyRequestsRepo } from "@/server/repositories/family-requests";
+import type { FamilyRequestsReadRepo } from "@/server/repositories/family-requests";
 import type {
   InteractionEventRecord,
   InteractionEventsRepo,
@@ -75,7 +75,7 @@ export type ReconnectDeps = {
   relationships: RelationshipsRepo;
   observations: ObservationsRepo;
   profiles: ProfilesRepo;
-  familyRequests: FamilyRequestsRepo;
+  familyRequests: FamilyRequestsReadRepo;
   conversations: ConversationsRepo;
   familyRender: FamilyRenderProvider;
 };
@@ -228,7 +228,7 @@ async function loadSuppressionSnapshot(
 
   const [accountStartedAt, outstanding, open, recent] = await Promise.all([
     resolveAccountStart(deps, input.userId, input.now),
-    deps.familyRequests.countOutstandingForUser(input.userId),
+    deps.familyRequests.countOutstandingForUser(input.userId, input.now.toISOString()),
     deps.opportunities.listOpenForUser(input.userId, detectionSweepConfig.openOpportunityLimit),
     deps.opportunities.listRecentForUser(
       input.userId,
