@@ -7,10 +7,13 @@ import { checkOutboundText } from "@/core/safety/output-guard";
 import { SharePayloadSchema } from "@/core/share/payload";
 import { findDeniedTerm } from "@/core/safety/deny-list";
 import { resolveAbsenceWindow } from "@/core/memory/temporal";
+import { absenceDetectionKey } from "@/core/detection/absence";
+import { cadenceDetectionKey } from "@/core/detection/cadence";
 import { EMPTY_EXTRACTION } from "@/core/memory/extraction-contract";
 import {
   draftOpportunity,
   runDetectionSweep,
+  type DetectionSweepResult,
   type ReconnectDeps,
 } from "@/server/services/reconnect";
 import type { InteractionEventRecord } from "@/server/repositories/interaction-events";
@@ -175,6 +178,38 @@ function harness(options: {
     familyRender: render,
   });
   return { store, render, deps };
+}
+
+/**
+ * Every disposition a candidate may end in. A candidate that reaches the
+ * processing loop and produces none of these has been dropped silently, which
+ * is what happened live: five candidates, three outcomes, two cadence
+ * detections gone without a log line or a row.
+ */
+const ACCOUNTED_OUTCOMES = [
+  "materialized",
+  "reloaded",
+  "resumed_materialized",
+  "suppressed",
+  "resumed_suppressed",
+  "resumed_draft",
+  "replayed_live",
+  "replayed_suppressed",
+  "rejected",
+  "deferred",
+  "entity_missing",
+  "signal_not_detected",
+  "signal_not_found",
+];
+
+/** candidates = discarded (by precedence) + one explicit outcome each. */
+function expectFullyAccounted(result: DetectionSweepResult): void {
+  expect(result.signals).toHaveLength(result.candidates - result.discarded);
+  for (const entry of result.signals) {
+    expect(ACCOUNTED_OUTCOMES, `unaccounted outcome ${entry.outcome}`).toContain(entry.outcome);
+  }
+  const keys = result.signals.map((entry) => entry.detectionKey);
+  expect(new Set(keys).size, "one outcome per candidate").toBe(keys.length);
 }
 
 beforeEach(resetIds);
@@ -992,6 +1027,410 @@ describe("5e. unfinished work is resumed, never abandoned and never duplicated",
     expect(forKey).toHaveLength(1);
     expect(unfinished).toHaveLength(1);
     expect(store.opportunities).toHaveLength(0);
+  });
+});
+
+describe("5f. no candidate leaves the sweep unaccounted for", () => {
+  /**
+   * The live failure: POST /api/dev/detect reported 5 candidates, 0 discarded,
+   * 0 replayed and 3 outcomes. The per-sweep work budget is 3, and the loop
+   * `break`-ed on it without recording anything — so two cadence detections
+   * vanished. Worse, `selected` is ordered by detector precedence, which puts
+   * every absence candidate ahead of every cadence one, so cadence was the
+   * systematic loser.
+   */
+  const KATE = "entity-kate";
+  const LATER = new Date(NOW.getTime() + 23 * 3_600_000);
+
+  /** A store with an absence and two cadence series across four entities. */
+  function mixedStore() {
+    const store = baseStore({
+      interactionEvents: [
+        absenceEvent("abs-john", JOHN),
+        ...weekly(13, MARY),
+        ...weekly(13, KATE),
+      ],
+      baselines: new Map([
+        [`${MARY}:visit`, activeBaseline(MARY)],
+        [`${KATE}:visit`, activeBaseline(KATE)],
+      ]),
+    });
+    store.entities.push({
+      id: KATE, type: "person", subtype: null, displayName: "Kate",
+      aliases: [], status: "active", lastMentionedAt: null,
+    });
+    return store;
+  }
+
+  /** A signal left `detected` by a process that died before materializing. */
+  function pendingSignal(store: ReconnectStore, entityId: string, detectionKey: string, type: "cadence_gap" | "user_asserted_absence") {
+    const id = `pending-${entityId}`;
+    store.signals.push({
+      id,
+      userId: USER,
+      entityId,
+      baselineId: null,
+      signalType: type,
+      status: "detected",
+      explanation:
+        type === "cadence_gap"
+          ? {
+              detector: "cadence_gap", methodVersion: "detection.v1", detectionKey,
+              entityId, eventType: "visit", medianGapDays: 7, madDays: 1,
+              thresholdDays: 11, daysSinceLast: 13, lastEventId: `${entityId}-13`,
+              lastEventDate: "2026-09-03", contributingEventCount: 5,
+              baselineInputsHash: `inputs-${entityId}`, conversationId: null,
+            }
+          : {
+              detector: "user_asserted_absence", methodVersion: "detection.v1", detectionKey,
+              entityId, eventType: "visit", sourceEventId: "abs-john",
+              absenceWindowStart: iso(7), absenceWindowEnd: iso(0),
+              statedPhrase: null, reportedAt: iso(0), certainty: 0.9,
+              baseline: null, conversationId: null,
+            },
+      detectedAt: iso(0),
+      suppressionReason: null,
+      materializedAt: null,
+    });
+    return id;
+  }
+
+  it("accounts for every candidate even when the work budget is spent", async () => {
+    const store = mixedStore();
+    const { deps } = harness({ store });
+
+    const result = await runDetectionSweep(deps, { userId: USER, conversationId: null });
+
+    expect(result.candidates).toBe(3);
+    expectFullyAccounted(result);
+    // Budget is 3, so all three fit here — the point is that the count adds up.
+    expect(result.signals.map((entry) => entry.outcome).sort()).toEqual([
+      "materialized", "materialized", "materialized",
+    ]);
+  });
+
+  it("reports the overflow as `deferred` rather than dropping it", async () => {
+    const store = mixedStore();
+    // A fourth candidate, one more than the budget of three.
+    const ELI = "entity-eli";
+    store.entities.push({
+      id: ELI, type: "person", subtype: null, displayName: "Eli",
+      aliases: [], status: "active", lastMentionedAt: null,
+    });
+    store.interactionEvents.push(...weekly(13, ELI));
+    store.baselines.set(`${ELI}:visit`, activeBaseline(ELI));
+
+    const { deps } = harness({ store });
+    const result = await runDetectionSweep(deps, { userId: USER, conversationId: null });
+
+    expect(result.candidates).toBe(4);
+    expectFullyAccounted(result);
+    const outcomes = result.signals.map((entry) => entry.outcome);
+    expect(outcomes.filter((o) => o === "materialized")).toHaveLength(3);
+    expect(outcomes.filter((o) => o === "deferred")).toHaveLength(1);
+    // Nothing durable was written for the deferred one...
+    expect(store.signals).toHaveLength(3);
+
+    // ...and the next ordinary sweep picks it up. Deferred is not lost.
+    const second = await runDetectionSweep(
+      fakeReconnectDeps({ store, clock: fixedClock(LATER), familyRender: fakeFamilyRender() }),
+      { userId: USER, conversationId: null },
+    );
+    expectFullyAccounted(second);
+    expect(store.signals).toHaveLength(4);
+  });
+
+  it("records a candidate whose entity has been deleted", async () => {
+    const store = mixedStore();
+    store.entities = store.entities.filter((entity) => entity.id !== MARY);
+
+    const { deps } = harness({ store });
+    const result = await runDetectionSweep(deps, { userId: USER, conversationId: null });
+
+    expectFullyAccounted(result);
+    expect(
+      result.signals.find((entry) => entry.entityId === MARY)?.outcome,
+    ).toBe("entity_missing");
+  });
+
+  it("a permanently unreadable pending signal does not drain the budget", async () => {
+    // The live account has two of these, left by a pre-schema deploy. Charging
+    // them would starve everything behind them on every single sweep — so the
+    // store deliberately holds MORE real candidates than the budget of three
+    // minus the two stuck rows. If rejections cost budget, work is deferred.
+    const store = mixedStore();
+    for (const extra of ["entity-eli", "entity-zoe"]) {
+      store.entities.push({
+        id: extra, type: "person", subtype: null, displayName: extra,
+        aliases: [], status: "active", lastMentionedAt: null,
+      });
+      store.interactionEvents.push(...weekly(13, extra));
+      store.baselines.set(`${extra}:visit`, activeBaseline(extra));
+    }
+    for (const entityId of [MARY, KATE]) {
+      const key = cadenceDetectionKey({
+        entityId, eventType: "visit",
+        baselineInputsHash: `inputs-${entityId}`, lastEventId: `${entityId}-13`,
+      });
+      const id = pendingSignal(store, entityId, key, "cadence_gap");
+      const signal = store.signals.find((row) => row.id === id)!;
+      signal.explanation = { detectionKey: key, detector: "cadence_gap", nonsense: true };
+    }
+
+    const { deps } = harness({ store });
+    const result = await runDetectionSweep(deps, { userId: USER, conversationId: null });
+
+    expectFullyAccounted(result);
+    const outcomes = result.signals.map((entry) => entry.outcome);
+    expect(result.candidates).toBe(5);
+    expect(outcomes.filter((o) => o === "rejected")).toHaveLength(2);
+    // All three real candidates behind the stuck rows were still processed:
+    // the budget of three was spent entirely on work that writes.
+    expect(outcomes.filter((o) => o === "materialized")).toHaveLength(3);
+    expect(outcomes).not.toContain("deferred");
+  });
+
+  it("resuming a `proposed` draft does not drain the signal budget either", async () => {
+    // Drafting has its own bound (one per sweep). Charging it to the signal
+    // budget would let one abandoned draft push a real detection out.
+    const store = mixedStore();
+    for (const extra of ["entity-eli"]) {
+      store.entities.push({
+        id: extra, type: "person", subtype: null, displayName: extra,
+        aliases: [], status: "active", lastMentionedAt: null,
+      });
+      store.interactionEvents.push(...weekly(13, extra));
+      store.baselines.set(`${extra}:visit`, activeBaseline(extra));
+    }
+    // MARY already materialized, but her draft never landed.
+    const cadenceKey = cadenceDetectionKey({
+      entityId: MARY, eventType: "visit",
+      baselineInputsHash: `inputs-${MARY}`, lastEventId: `${MARY}-13`,
+    });
+    const signalId = pendingSignal(store, MARY, cadenceKey, "cadence_gap");
+    const signal = store.signals.find((row) => row.id === signalId)!;
+    signal.status = "materialized";
+    signal.materializedAt = iso(0);
+    store.opportunities.push({
+      id: "opp-pending", userId: USER, signalId, entityId: MARY,
+      proposal: {
+        entityId: MARY, entityName: "Mary", eventType: "visit",
+        observation: { kind: "no_mention_since", days: 13 }, question: "ask_if_visiting",
+      },
+      sharePayload: null, renderedText: null, renderedTextHash: null,
+      status: "proposed", offeredAt: null, resolvedAt: null,
+      expiresAt: new Date(NOW.getTime() + DAY_MS).toISOString(), createdAt: iso(0),
+    });
+
+    const { deps } = harness({ store });
+    const result = await runDetectionSweep(deps, { userId: USER, conversationId: null });
+
+    expectFullyAccounted(result);
+    const outcomes = result.signals.map((entry) => entry.outcome);
+    expect(result.candidates).toBe(4);
+    expect(outcomes.filter((o) => o === "resumed_draft")).toHaveLength(1);
+    // The three detections still all fit in the budget.
+    expect(outcomes.filter((o) => o === "materialized")).toHaveLength(3);
+    expect(outcomes).not.toContain("deferred");
+  });
+});
+
+describe("5g. cadence is never starved by absence", () => {
+  const KATE = "entity-kate";
+
+  it("resumes a pending CADENCE signal — the exact live case", async () => {
+    // entity M4Cadence1789574530: cadence_gap, status detected, opportunity null.
+    const store = baseStore({
+      interactionEvents: weekly(13),
+      baselines: new Map([[`${JOHN}:visit`, activeBaseline()]]),
+    });
+    const key = cadenceDetectionKey({
+      entityId: JOHN, eventType: "visit",
+      baselineInputsHash: `inputs-${JOHN}`, lastEventId: `${JOHN}-13`,
+    });
+    store.signals.push({
+      id: "sig-live", userId: USER, entityId: JOHN, baselineId: null,
+      signalType: "cadence_gap", status: "detected",
+      explanation: {
+        detector: "cadence_gap", methodVersion: "detection.v1", detectionKey: key,
+        entityId: JOHN, eventType: "visit", medianGapDays: 7, madDays: 1,
+        thresholdDays: 11, daysSinceLast: 13, lastEventId: `${JOHN}-13`,
+        lastEventDate: "2026-09-03", contributingEventCount: 5,
+        baselineInputsHash: `inputs-${JOHN}`, conversationId: null,
+      },
+      detectedAt: iso(0), suppressionReason: null, materializedAt: null,
+    });
+
+    const { deps, render } = harness({ store });
+    const result = await runDetectionSweep(deps, { userId: USER, conversationId: null });
+
+    expectFullyAccounted(result);
+    expect(result.signals[0]).toMatchObject({
+      signalId: "sig-live",
+      signalType: "cadence_gap",
+      outcome: "resumed_materialized",
+    });
+    // The SAME signal, not a replacement.
+    expect(store.signals).toHaveLength(1);
+    expect(store.signals[0].id).toBe("sig-live");
+    expect(store.signals[0].status).toBe("materialized");
+    expect(store.opportunities).toHaveLength(1);
+    expect(store.opportunities[0].signalId).toBe("sig-live");
+    expect(store.opportunities[0].status).toBe("drafted");
+    expect(render.calls).toHaveLength(1);
+  });
+
+  it("detects a fresh cadence gap with no prior signal, and reports it", async () => {
+    // entity M4Cadence1789574689: ACTIVE, median 7, MAD 0, threshold 11,
+    // last positive event 13 days ago, no signal, no opportunity.
+    const store = baseStore({
+      interactionEvents: weekly(13),
+      baselines: new Map([
+        [`${JOHN}:visit`, { ...activeBaseline(), madDays: 0 }],
+      ]),
+    });
+    const { deps } = harness({ store });
+
+    const result = await runDetectionSweep(deps, { userId: USER, conversationId: null });
+
+    expectFullyAccounted(result);
+    expect(result.candidates).toBe(1);
+    expect(result.signals).toHaveLength(1);
+    expect(result.signals[0]).toMatchObject({
+      signalType: "cadence_gap",
+      outcome: "materialized",
+    });
+    const explanation = store.signals[0].explanation as {
+      medianGapDays: number; madDays: number; thresholdDays: number; daysSinceLast: number;
+    };
+    expect(explanation).toMatchObject({
+      medianGapDays: 7, madDays: 0, thresholdDays: 11, daysSinceLast: 13,
+    });
+    expect(store.opportunities[0].status).toBe("drafted");
+  });
+
+  it("processes absence AND cadence in one sweep, recovery first", async () => {
+    // The live shape: pending absence, pending cadence, fresh cadence.
+    const store = baseStore({
+      interactionEvents: [
+        absenceEvent("abs-john", JOHN),
+        ...weekly(13, MARY),
+        ...weekly(13, KATE),
+      ],
+      baselines: new Map([
+        [`${MARY}:visit`, activeBaseline(MARY)],
+        [`${KATE}:visit`, activeBaseline(KATE)],
+      ]),
+    });
+    store.entities.push({
+      id: KATE, type: "person", subtype: null, displayName: "Kate",
+      aliases: [], status: "active", lastMentionedAt: null,
+    });
+
+    const absenceKey = absenceDetectionKey("abs-john");
+    const cadenceKey = cadenceDetectionKey({
+      entityId: MARY, eventType: "visit",
+      baselineInputsHash: `inputs-${MARY}`, lastEventId: `${MARY}-13`,
+    });
+    store.signals.push(
+      {
+        id: "pending-absence", userId: USER, entityId: JOHN, baselineId: null,
+        signalType: "user_asserted_absence", status: "detected",
+        explanation: {
+          detector: "user_asserted_absence", methodVersion: "detection.v1",
+          detectionKey: absenceKey, entityId: JOHN, eventType: "visit",
+          sourceEventId: "abs-john", absenceWindowStart: iso(7),
+          absenceWindowEnd: iso(0), statedPhrase: null, reportedAt: iso(0),
+          certainty: 0.9, baseline: null, conversationId: null,
+        },
+        detectedAt: iso(0), suppressionReason: null, materializedAt: null,
+      },
+      {
+        id: "pending-cadence", userId: USER, entityId: MARY, baselineId: null,
+        signalType: "cadence_gap", status: "detected",
+        explanation: {
+          detector: "cadence_gap", methodVersion: "detection.v1",
+          detectionKey: cadenceKey, entityId: MARY, eventType: "visit",
+          medianGapDays: 7, madDays: 1, thresholdDays: 11, daysSinceLast: 13,
+          lastEventId: `${MARY}-13`, lastEventDate: "2026-09-03",
+          contributingEventCount: 5, baselineInputsHash: `inputs-${MARY}`,
+          conversationId: null,
+        },
+        detectedAt: iso(0), suppressionReason: null, materializedAt: null,
+      },
+    );
+
+    const { deps } = harness({ store });
+    const result = await runDetectionSweep(deps, { userId: USER, conversationId: null });
+
+    expectFullyAccounted(result);
+    expect(result.candidates).toBe(3);
+
+    const byEntity = new Map(result.signals.map((entry) => [entry.entityId, entry]));
+    // Both pending cycles resumed — the cadence one was NOT starved behind the
+    // absence one, which is precisely what happened live.
+    expect(byEntity.get(JOHN)).toMatchObject({
+      signalId: "pending-absence", outcome: "resumed_materialized",
+    });
+    expect(byEntity.get(MARY)).toMatchObject({
+      signalId: "pending-cadence", outcome: "resumed_materialized",
+    });
+    // And the fresh cadence candidate was processed in the same sweep.
+    expect(byEntity.get(KATE)).toMatchObject({
+      signalType: "cadence_gap", outcome: "materialized",
+    });
+
+    expect(store.signals).toHaveLength(3);
+    expect(store.signals.filter((row) => row.status === "materialized")).toHaveLength(3);
+    expect(store.opportunities).toHaveLength(3);
+    // Drafting stays bounded at one per sweep; the rest resume next time.
+    expect(result.drafts).toHaveLength(1);
+  });
+
+  it("recovery outranks fresh detection when the budget is tight", async () => {
+    // Three fresh absence candidates plus one pending cadence: under the old
+    // precedence-ordered slice the pending cadence could never be reached.
+    const store = baseStore({
+      interactionEvents: [
+        ...weekly(13, MARY),
+        absenceEvent("abs-a", JOHN),
+        absenceEvent("abs-b", SIMBA),
+        absenceEvent("abs-c", KATE),
+      ],
+      baselines: new Map([[`${MARY}:visit`, activeBaseline(MARY)]]),
+    });
+    store.entities.push({
+      id: KATE, type: "person", subtype: null, displayName: "Kate",
+      aliases: [], status: "active", lastMentionedAt: null,
+    });
+    const cadenceKey = cadenceDetectionKey({
+      entityId: MARY, eventType: "visit",
+      baselineInputsHash: `inputs-${MARY}`, lastEventId: `${MARY}-13`,
+    });
+    store.signals.push({
+      id: "pending-cadence", userId: USER, entityId: MARY, baselineId: null,
+      signalType: "cadence_gap", status: "detected",
+      explanation: {
+        detector: "cadence_gap", methodVersion: "detection.v1",
+        detectionKey: cadenceKey, entityId: MARY, eventType: "visit",
+        medianGapDays: 7, madDays: 1, thresholdDays: 11, daysSinceLast: 13,
+        lastEventId: `${MARY}-13`, lastEventDate: "2026-09-03",
+        contributingEventCount: 5, baselineInputsHash: `inputs-${MARY}`,
+        conversationId: null,
+      },
+      detectedAt: iso(0), suppressionReason: null, materializedAt: null,
+    });
+
+    const { deps } = harness({ store });
+    const result = await runDetectionSweep(deps, { userId: USER, conversationId: null });
+
+    expectFullyAccounted(result);
+    expect(result.candidates).toBe(4);
+    // The unfinished cycle went first, whatever the detector precedence says.
+    expect(result.signals[0]).toMatchObject({
+      signalId: "pending-cadence", outcome: "resumed_materialized",
+    });
+    expect(result.signals.filter((e) => e.outcome === "deferred")).toHaveLength(1);
   });
 });
 

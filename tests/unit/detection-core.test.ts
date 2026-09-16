@@ -102,6 +102,71 @@ describe("1. the canonical cadence arithmetic", () => {
   });
 });
 
+describe("1b. the live acceptance series (dev preset `cadence-gap`)", () => {
+  /**
+   * The exact offsets POST /api/dev/seed-events writes for the `cadence-gap`
+   * preset. Pinned here because the demo margin is deliberately two days: a
+   * threshold regression has to break this loudly rather than quietly widen
+   * the tolerance (R5).
+   */
+  const PRESET_OFFSETS = [48, 41, 34, 27, 20, 13];
+
+  function presetSeries(): BaselineInputEvent[] {
+    return PRESET_OFFSETS.map((daysAgo) => ({
+      id: `seed-${daysAgo}`,
+      occurredAt: new Date(NOW.getTime() - daysAgo * DAY_MS),
+      occurredAtPrecision: "day" as const,
+      certainty: 0.9,
+      polarity: "positive" as const,
+    }));
+  }
+
+  it("is ACTIVE with median 7, MAD 0 and a threshold of 11", () => {
+    const baseline = computeBaseline(presetSeries(), NOW);
+    expect(baseline.status).toBe("ACTIVE");
+    expect(baseline.gaps).toEqual([7, 7, 7, 7, 7]);
+    expect(baseline.medianGapDays).toBe(7);
+    expect(baseline.madDays).toBe(0);
+    expect(computeCadenceThreshold(7, 0)).toBe(11);
+  });
+
+  it("fires at 13 days, with the last event on 2026-09-03", () => {
+    const events = presetSeries();
+    const baseline = computeBaseline(events, NOW);
+    const candidate = detectCadenceGap({
+      entityId: ENTITY, eventType: "visit", baseline, events, now: NOW, conversationId: null,
+    });
+    expect(candidate).not.toBeNull();
+    expect(candidate!.explanation as CadenceExplanation).toMatchObject({
+      medianGapDays: 7,
+      madDays: 0,
+      thresholdDays: 11,
+      daysSinceLast: 13,
+      lastEventDate: "2026-09-03",
+      contributingEventCount: 6,
+    });
+  });
+
+  it("the margin is two days: 11 would not fire, 12 would", () => {
+    const shifted = (extraDays: number) =>
+      PRESET_OFFSETS.map((daysAgo) => ({
+        id: `seed-${daysAgo}`,
+        occurredAt: new Date(NOW.getTime() - (daysAgo - extraDays) * DAY_MS),
+        occurredAtPrecision: "day" as const,
+        certainty: 0.9,
+        polarity: "positive" as const,
+      }));
+    for (const [extraDays, fires] of [[2, false], [1, true], [0, true]] as const) {
+      const events = shifted(extraDays);
+      const baseline = computeBaseline(events, NOW);
+      const candidate = detectCadenceGap({
+        entityId: ENTITY, eventType: "visit", baseline, events, now: NOW, conversationId: null,
+      });
+      expect(candidate !== null, `daysSinceLast ${13 - extraDays}`).toBe(fires);
+    }
+  });
+});
+
 describe("2. the cadence detector refuses to run without a rhythm", () => {
   it("NO_BASELINE produces no signal", () => {
     const events = series(30).slice(0, 2);

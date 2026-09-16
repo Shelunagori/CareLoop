@@ -4,7 +4,7 @@ import {
   type OpportunityStatus,
 } from "@/core/consent/status";
 import type { Db } from "./db";
-import type { Database } from "@/server/db/types.generated";
+import type { Database, Json } from "@/server/db/types.generated";
 
 /**
  * Reconnect opportunities.
@@ -82,7 +82,8 @@ export type OpportunitiesRepo = {
     signalId: string;
     userId: string;
     entityId: string;
-    proposal: unknown;
+    /** Written verbatim into reconnect_opportunities.proposal (jsonb). */
+    proposal: Json;
     expiresAt: string;
     now: string;
   }): Promise<MaterializeResult>;
@@ -102,7 +103,7 @@ export type OpportunitiesRepo = {
    */
   saveDraft(input: {
     id: string;
-    sharePayload: unknown;
+    sharePayload: Json;
     renderedText: string;
     renderedTextHash: string;
     now: string;
@@ -147,31 +148,14 @@ function toRecord(row: Row): OpportunityRecord {
   };
 }
 
-/**
- * `materialize_signal` is not in types.generated.ts yet: the migration is
- * written and locally validated but NOT pushed, and the generated types are
- * produced from the live database (`npm run db:types`) and must never be
- * hand-edited. This narrow, single-purpose signature is the seam that keeps
- * the build honest in the meantime; it disappears on the first regeneration
- * after the migration is reviewed and applied.
- */
-type MaterializeRpc = (
-  name: "materialize_signal",
-  args: {
-    p_signal_id: string;
-    p_user_id: string;
-    p_entity_id: string;
-    p_proposal: unknown;
-    p_expires_at: string;
-    p_now: string;
-  },
-) => PromiseLike<{ data: unknown; error: { message: string } | null }>;
-
 export function opportunitiesRepo(db: Db): OpportunitiesRepo {
   return {
     async materialize(input) {
-      const rpc = db.rpc as unknown as MaterializeRpc;
-      const { data, error } = await rpc("materialize_signal", {
+      // Called straight off the client. `const rpc = db.rpc` would detach the
+      // method from its receiver, and supabase-js reads instance state
+      // internally, so the detached call dies on `undefined.rest` at runtime
+      // while typechecking perfectly. Never extract a client method.
+      const { data, error } = await db.rpc("materialize_signal", {
         p_signal_id: input.signalId,
         p_user_id: input.userId,
         p_entity_id: input.entityId,
@@ -235,7 +219,7 @@ export function opportunitiesRepo(db: Db): OpportunitiesRepo {
       const { data, error } = await db
         .from("reconnect_opportunities")
         .update({
-          share_payload: input.sharePayload as never,
+          share_payload: input.sharePayload,
           rendered_text: input.renderedText,
           rendered_text_hash: input.renderedTextHash,
           status: "drafted",

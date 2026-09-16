@@ -464,3 +464,132 @@ describe("an unfinished cycle is singular, reused, and blocks a fresh one", () =
     );
   });
 });
+
+describe("sweep accounting: no candidate ever disappears", () => {
+  /**
+   * The identity that would have caught the live failure outright:
+   *
+   *   candidates = discarded (lost precedence) + one explicit outcome each
+   *
+   * Generated across entity counts that straddle the per-sweep work budget,
+   * with a mix of detectors and pre-existing signals, because the live bug
+   * only appeared once there were more candidates than budget AND the
+   * overflow happened to be the lower-precedence detector.
+   */
+  const DAY = 86_400_000;
+  const NOW_LOCAL = new Date("2026-09-16T12:00:00.000Z");
+  const at = (daysAgo: number) => new Date(NOW_LOCAL.getTime() - daysAgo * DAY).toISOString();
+
+  const entityRow = (id: string) => ({
+    id, type: "person" as const, subtype: null, displayName: id,
+    aliases: [] as string[], status: "active" as const, lastMentionedAt: null,
+  });
+
+  const activeBaseline = (entityId: string) => ({
+    id: `bl-${entityId}`, entityId, eventType: "visit" as const,
+    status: "ACTIVE" as const, medianGapDays: 7, madDays: 1, observationCount: 5,
+    windowStart: null, windowEnd: null, reasons: [],
+    methodVersion: "baseline.v1", inputsHash: `inputs-${entityId}`,
+    computedAt: NOW_LOCAL.toISOString(),
+  });
+
+  const positive = (entityId: string, daysAgo: number) => ({
+    id: `${entityId}-${daysAgo}`, entityId, eventType: "visit" as const,
+    occurredAt: at(daysAgo), occurredAtPrecision: "day" as const,
+    reportedAt: at(daysAgo), certainty: 0.9, polarity: "positive" as const,
+    windowStart: null, windowEnd: null, sourceObservationId: null,
+    ingestFingerprint: `fp-${entityId}-${daysAgo}`,
+  });
+
+  const absence = (entityId: string) => ({
+    id: `abs-${entityId}`, entityId, eventType: "visit" as const,
+    occurredAt: at(7), occurredAtPrecision: "day" as const,
+    reportedAt: at(0), certainty: 0.9, polarity: "absence" as const,
+    windowStart: at(7), windowEnd: at(0), sourceObservationId: null,
+    ingestFingerprint: `fp-abs-${entityId}`,
+  });
+
+  it("holds for any mix of detectors, entity counts and budget pressure", async () => {
+    await fc.assert(
+      fc.asyncProperty(
+        fc.integer({ min: 0, max: 5 }),
+        fc.integer({ min: 0, max: 5 }),
+        async (absenceCount, cadenceCount) => {
+          resetIds();
+          const entities = [];
+          const events = [];
+          const baselines = new Map();
+
+          for (let i = 0; i < absenceCount; i += 1) {
+            const id = `abs-entity-${i}`;
+            entities.push(entityRow(id));
+            events.push(absence(id));
+          }
+          for (let i = 0; i < cadenceCount; i += 1) {
+            const id = `cad-entity-${i}`;
+            entities.push(entityRow(id));
+            events.push(...[41, 36, 29, 22, 13].map((d) => positive(id, d)));
+            baselines.set(`${id}:visit`, activeBaseline(id));
+          }
+
+          const store = createStore({
+            entities,
+            interactionEvents: events,
+            baselines,
+            profile: {
+              id: "u", displayName: null, familyDisplayName: "Dad",
+              createdAt: at(200),
+            },
+          });
+          const deps = fakeReconnectDeps({
+            store, clock: fixedClock(NOW_LOCAL), familyRender: fakeFamilyRender(),
+          });
+
+          const result = await runDetectionSweep(deps, { userId: "u", conversationId: null });
+
+          const keys = result.signals.map((entry) => entry.detectionKey);
+          return (
+            result.signals.length === result.candidates - result.discarded &&
+            new Set(keys).size === keys.length &&
+            result.signals.every((entry) => typeof entry.outcome === "string")
+          );
+        },
+      ),
+      { numRuns: 60, seed: 20260916 },
+    );
+  });
+
+  it("never writes more signals in one sweep than the budget allows", async () => {
+    await fc.assert(
+      fc.asyncProperty(fc.integer({ min: 1, max: 6 }), async (cadenceCount) => {
+        resetIds();
+        const entities = [];
+        const events = [];
+        const baselines = new Map();
+        for (let i = 0; i < cadenceCount; i += 1) {
+          const id = `cad-${i}`;
+          entities.push(entityRow(id));
+          events.push(...[41, 36, 29, 22, 13].map((d) => positive(id, d)));
+          baselines.set(`${id}:visit`, activeBaseline(id));
+        }
+        const store = createStore({
+          entities, interactionEvents: events, baselines,
+          profile: { id: "u", displayName: null, familyDisplayName: "Dad", createdAt: at(200) },
+        });
+        const deps = fakeReconnectDeps({
+          store, clock: fixedClock(NOW_LOCAL), familyRender: fakeFamilyRender(),
+        });
+
+        const result = await runDetectionSweep(deps, { userId: "u", conversationId: null });
+
+        const deferred = result.signals.filter((e) => e.outcome === "deferred").length;
+        return (
+          store.signals.length <= 3 &&
+          store.signals.length === Math.min(cadenceCount, 3) &&
+          deferred === Math.max(cadenceCount - 3, 0)
+        );
+      }),
+      { numRuns: 30, seed: 20260916 },
+    );
+  });
+});

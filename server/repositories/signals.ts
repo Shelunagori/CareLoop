@@ -1,4 +1,4 @@
-import type { Database } from "@/server/db/types.generated";
+import type { Database, Json } from "@/server/db/types.generated";
 import type { Db } from "./db";
 
 type SignalType = Database["public"]["Enums"]["signal_type"];
@@ -28,7 +28,7 @@ export type SignalsRepo = {
     entityId: string;
     baselineId: string | null;
     signalType: SignalType;
-    explanation: unknown;
+    explanation: Json;
     /** Passed in — the Clock port owns time, not this layer. */
     detectedAt: string;
   }): Promise<SignalRecord>;
@@ -82,7 +82,7 @@ export function signalsRepo(db: Db): SignalsRepo {
           entity_id: input.entityId,
           baseline_id: input.baselineId,
           signal_type: input.signalType,
-          explanation: input.explanation as never,
+          explanation: input.explanation,
           detected_at: input.detectedAt,
           status: "detected",
         })

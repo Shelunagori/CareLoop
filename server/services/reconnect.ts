@@ -96,7 +96,11 @@ export type SignalOutcome =
   /** An abandoned `detected` signal was carried through to a suppression. */
   | "resumed_suppressed"
   /** An abandoned `proposed` opportunity was handed back to the drafter. */
-  | "resumed_draft";
+  | "resumed_draft"
+  /** This sweep's work budget was spent; the next sweep picks it up. */
+  | "deferred"
+  /** The entity was deleted between detection and persistence. */
+  | "entity_missing";
 
 export type SweepSignalResult = {
   /** Null when the candidate was recognised as a replay and nothing written. */
@@ -133,6 +137,12 @@ export type DetectionSweepResult = {
   discarded: number;
   /** Candidates recognised as an in-flight or already-answered cycle. */
   replayed: number;
+  /**
+   * One entry per candidate that survived precedence. INVARIANT:
+   * `candidates === discarded + signals.length`. A candidate that reaches the
+   * processing loop and produces no entry is a silently dropped detection,
+   * which is the bug this field exists to make impossible to miss.
+   */
   signals: SweepSignalResult[];
   drafts: DraftResult[];
 };
@@ -704,14 +714,60 @@ export async function runDetectionSweep(
     });
   };
 
-  for (const candidate of selected) {
-    if (processed >= detectionSweepConfig.maxSignalsPerSweep) break;
+  /**
+   * Classification is pure - it reads the signals and opportunities already
+   * loaded above - so every candidate is classified BEFORE any budget is
+   * spent. That ordering is what lets the sweep report on candidates it did
+   * not get to, instead of losing them.
+   */
+  const classified = selected.map((candidate) => ({
+    candidate,
+    cycle: classifyCycle(candidate.detectionKey, recentSignals, snapshot.opportunityBySignal),
+  }));
 
-    const cycle = classifyCycle(
-      candidate.detectionKey,
-      recentSignals,
-      snapshot.opportunityBySignal,
-    );
+  /**
+   * UNFINISHED WORK FIRST.
+   *
+   * `selected` arrives sorted by detector precedence, which puts every
+   * absence candidate ahead of every cadence one. Taking the first N of that
+   * list means a cadence gap is starved whenever enough absence assertions are
+   * present - including a cadence signal that is sitting `detected` and
+   * waiting to be resumed. Recovery of durable work is never less important
+   * than a fresh detection, so it is ordered first, and detector precedence
+   * only breaks ties within a group.
+   */
+  const RECOVERY_FIRST: Record<CycleState["kind"], number> = {
+    DETECTED_PENDING: 0,
+    PROPOSED_PENDING: 0,
+    NONE: 1,
+    RESOLVED: 1,
+    LIVE_COMPLETE: 2,
+  };
+  const ordered = classified
+    .map((entry, index) => ({ entry, index }))
+    .sort(
+      (a, b) =>
+        RECOVERY_FIRST[a.entry.cycle.kind] - RECOVERY_FIRST[b.entry.cycle.kind] ||
+        a.index - b.index,
+    )
+    .map(({ entry }) => entry);
+
+  /**
+   * The per-sweep work budget, spent only on work that actually WRITES: a
+   * signal insert, a suppression transition, or a materialization call.
+   * Replays, deferrals and rejections are free.
+   *
+   * That distinction is load-bearing. Charging a rejection would let a handful
+   * of permanently unreadable rows drain the budget on every sweep and starve
+   * everything behind them forever - the durable version of the same bug.
+   */
+  const spendBudget = (): boolean => {
+    if (processed >= detectionSweepConfig.maxSignalsPerSweep) return false;
+    processed += 1;
+    return true;
+  };
+
+  for (const { candidate, cycle } of ordered) {
     const base = {
       detectionKey: candidate.detectionKey,
       signalType: candidate.signalType,
@@ -726,9 +782,9 @@ export async function runDetectionSweep(
     }
 
     // Materialized, but the draft never landed. Hand that SAME opportunity
-    // back to the drafter rather than detecting anything again.
+    // back to the drafter rather than detecting anything again. Free: it
+    // writes no signal and calls no RPC; drafting has its own budget.
     if (cycle.kind === "PROPOSED_PENDING") {
-      processed += 1;
       if (!proposedIds.includes(cycle.opportunityId)) proposedIds.push(cycle.opportunityId);
       logEvent({
         event: "detection.resumed",
@@ -747,9 +803,18 @@ export async function runDetectionSweep(
     }
 
     const entity = entities.find((row) => row.id === candidate.entityId);
-    // An entity deleted between detection and persistence has no name to put
-    // in a proposal, and inventing one is not an option.
-    if (!entity) continue;
+    if (!entity) {
+      // An entity deleted between detection and persistence has no name to put
+      // in a proposal, and inventing one is not an option. Recorded rather
+      // than skipped: "the entity went away" is an answer, silence is not.
+      logEvent({
+        event: "detection.entity_missing",
+        entityId: candidate.entityId,
+        detectionKey: candidate.detectionKey,
+      });
+      results.push({ ...base, signalId: null, outcome: "entity_missing" });
+      continue;
+    }
 
     const baselineRow = await deps.baselines.find({
       userId,
@@ -773,7 +838,6 @@ export async function runDetectionSweep(
     // unfinished durable work, not a completed cycle, and it is resumed -
     // never retried by writing a second signal.
     if (cycle.kind === "DETECTED_PENDING") {
-      processed += 1;
       const existing = cycle.signal;
 
       logEvent({
@@ -785,6 +849,10 @@ export async function runDetectionSweep(
       });
 
       if (!decision.allowed) {
+        if (!spendBudget()) {
+          results.push({ ...base, signalId: existing.id, outcome: "deferred" });
+          continue;
+        }
         // The world moved on while the work was abandoned. The SAME signal
         // records the refusal - markSuppressed is conditional on the row still
         // being `detected`, so a concurrent resume cannot double-write it.
@@ -810,6 +878,8 @@ export async function runDetectionSweep(
       if (!parsed.success) {
         // Cannot complete a cycle whose evidence no longer parses. Left
         // `detected` and logged, for the same reason an integrity failure is.
+        // Free, deliberately: a stuck row must not consume the budget that
+        // everything behind it is waiting for.
         console.error(
           JSON.stringify({
             event: "detection.unreadable_explanation",
@@ -818,6 +888,11 @@ export async function runDetectionSweep(
           }),
         );
         results.push({ ...base, signalId: existing.id, outcome: "rejected" });
+        continue;
+      }
+
+      if (!spendBudget()) {
+        results.push({ ...base, signalId: existing.id, outcome: "deferred" });
         continue;
       }
 
@@ -844,6 +919,14 @@ export async function runDetectionSweep(
       continue;
     }
 
+    if (!spendBudget()) {
+      // Nothing durable was written for this candidate, and the detector is
+      // deterministic, so the next ordinary request recomputes it and picks it
+      // up. Deferred work is never lost work - but it is always reported.
+      results.push({ ...base, signalId: null, outcome: "deferred" });
+      continue;
+    }
+
     const signal = await deps.signals.insert({
       userId,
       entityId: candidate.entityId,
@@ -856,7 +939,6 @@ export async function runDetectionSweep(
       // to be (docs/06 section 19); the explanation carries the evidence
       // instead, and it is readable.
     });
-    processed += 1;
 
     logEvent({
       event: "detection.signal",
