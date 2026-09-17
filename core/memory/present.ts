@@ -43,8 +43,24 @@ function formatDate(card: EpisodeCard): string {
   }
 }
 
+/**
+ * One entity, as the companion is allowed to know it.
+ *
+ * The first line is deliberate: `name to use` rather than a bare heading.
+ * Live acceptance produced "Have you heard from Johnny?" about an entity
+ * stored as John, and the card was part of why - it listed names without
+ * saying which one was the person's and which were merely on record, so the
+ * model read the list as a choice. A name is an identifier here, not a
+ * stylistic option: the person's son is called what he is called, and a
+ * companion that renames him is not remembering, it is guessing.
+ *
+ * Alternates are labelled as recorded, not offered. The prompt carries the
+ * matching rule; between them there is no reading of this card in which
+ * inventing a diminutive is permitted.
+ */
 export function renderEntityCard(card: EntityCard): string {
   const lines = [`${card.name}`];
+  lines.push(`- name to use: ${card.name}`);
   lines.push(`- ${card.type}${card.subtype ? ` (${card.subtype})` : ""}`);
   if (card.relationToUser) {
     lines.push(`- their ${card.relationToUser.kind}${renderStatus(card.relationToUser.status)}`);
@@ -53,7 +69,10 @@ export function renderEntityCard(card: EntityCard): string {
     lines.push(`- ${related.kind} of ${related.name}${renderStatus(related.status)}`);
   }
   if (card.aliases.length > 0) {
-    lines.push(`- also called ${[...card.aliases].sort().join(", ")}`);
+    // "on record" and not "also called": confirmed alternates that are in the
+    // notes, not permission to pick one. How each was learned is not recorded,
+    // so nothing downstream may claim the person uses it themselves.
+    lines.push(`- other names on record: ${[...card.aliases].sort().join(", ")}`);
   }
   return lines.join("\n");
 }

@@ -1,3 +1,4 @@
+import type { TurnEvent } from "@/server/services/conversation";
 import type { LlmChatRequest, LlmProvider } from "@/server/adapters/openai/types";
 import type { IngestJobPayload, JobsRepo } from "@/server/repositories/jobs";
 import { EMPTY_MEMORY } from "@/server/services/context";
@@ -99,10 +100,33 @@ export function fakeLlm(options: {
   };
 }
 
-export async function drain(stream: AsyncIterable<string>): Promise<string> {
-  let out = "";
-  for await (const chunk of stream) out += chunk;
-  return out;
+/**
+ * The assistant text a turn produces, reassembled from its events.
+ *
+ * Deliberately rebuilds the SAME string the server persists - closure line,
+ * blank line, model deltas, blank line, offer block - so every assertion
+ * written against the old flat stream still means what it meant. If this
+ * reconstruction and `persistOnSuccess` ever disagree, the wire format has
+ * started drifting from the stored message, which is the one thing the
+ * framing was not allowed to do.
+ */
+export async function drain(stream: AsyncIterable<TurnEvent>): Promise<string> {
+  let text = "";
+  for await (const event of stream) {
+    if (event.type === "closure") text += `${event.sentence}\n\n`;
+    else if (event.type === "delta") text += event.text;
+    else if (event.type === "offer") text += `\n\n${event.block}`;
+    // `state` carries no message text: it describes the reconnect, not the
+    // turn, and nothing about it is persisted into the assistant message.
+  }
+  return text;
+}
+
+/** The typed events themselves, for tests about the wire rather than the text. */
+export async function drainEvents(stream: AsyncIterable<TurnEvent>): Promise<TurnEvent[]> {
+  const events: TurnEvent[] = [];
+  for await (const event of stream) events.push(event);
+  return events;
 }
 
 

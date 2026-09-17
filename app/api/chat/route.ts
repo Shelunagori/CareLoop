@@ -66,8 +66,13 @@ export async function POST(request: Request) {
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       try {
-        for await (const delta of turn.stream) {
-          controller.enqueue(encoder.encode(delta));
+        // Newline-delimited JSON, one turn event per line. Framed rather than
+        // flat text so the browser is handed the reconnect offer as FIELDS -
+        // recipient, opportunity id, the exact stored bytes - instead of being
+        // asked to recover them by reading the assistant's prose. What gets
+        // persisted is unchanged; this is the wire only.
+        for await (const event of turn.stream) {
+          controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
         }
         controller.close();
       } catch (error) {
@@ -175,7 +180,7 @@ export async function POST(request: Request) {
 
   return new Response(stream, {
     headers: {
-      "Content-Type": "text/plain; charset=utf-8",
+      "Content-Type": "application/x-ndjson; charset=utf-8",
       "Cache-Control": "no-store",
       "X-Conversation-Id": turn.conversationId,
       // Defeats proxy buffering that would otherwise defeat streaming.

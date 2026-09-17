@@ -32,6 +32,11 @@ export const DEMO_GEORGE: DemoFixtureSpec = {
   },
 
   entities: [
+// A recorded alias, kept on purpose. The stronger acceptance case is a
+    // person who HAS one: asked about "John", the companion must still say
+    // John (or "him"), and may reach for "Johnny" only after George does.
+    // Deleting real fixture data to avoid the symptom would have tested a
+    // world the product does not live in.
     { key: "john", displayName: "John", type: "person", subtype: null, aliases: ["Johnny"] },
     // `subtype` is freeform and descriptive; nothing branches on it.
     { key: "simba", displayName: "Simba", type: "pet", subtype: "dog" },

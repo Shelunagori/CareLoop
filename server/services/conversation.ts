@@ -6,6 +6,10 @@ import type { MessagesRepo, StoredMessage } from "@/server/repositories/messages
 import { assembleContext, EMPTY_MEMORY, type MemorySections } from "./context";
 import type { ConsentOutcome, OfferResult } from "./consent";
 import type { PendingClosure } from "./closure";
+import type { OpportunitiesRepo } from "@/server/repositories/opportunities";
+import type { EntitiesRepo } from "@/server/repositories/entities";
+import type { ProfilesRepo } from "@/server/repositories/profiles";
+import { buildOfferBlock } from "@/core/share/offer";
 
 /**
  * Orchestration for one conversational turn. The route handler stays thin:
@@ -31,6 +35,13 @@ export class EmptyCompletionError extends Error {
 export type ConversationDataDeps = {
   conversations: ConversationsRepo;
   messages: MessagesRepo;
+  /**
+   * Read-only extras for the chat page. Optional so the hot path and every
+   * existing test can construct this type without them.
+   */
+  opportunities?: Pick<OpportunitiesRepo, "listOpenForUser">;
+  entities?: Pick<EntitiesRepo, "listForUser">;
+  profiles?: ProfilesRepo;
 };
 
 /**
@@ -78,11 +89,51 @@ export type TurnInput = {
   text: string;
 };
 
+/**
+ * What a turn emits over the wire.
+ *
+ * TRANSPORT ONLY. The persisted assistant message is assembled from exactly
+ * the same pieces, in exactly the same order, and is byte-identical to what it
+ * was before this framing existed - so the M5 chain (stored == shown ==
+ * approved == sent) is untouched and historical messages still render.
+ *
+ * The reason it is typed rather than a flat text stream: the browser must be
+ * able to draw a reconnect card without READING the assistant's sentences to
+ * work out that one is on the table. Recovering the recipient, the draft or
+ * the consent state by parsing "I can send John…" would put the client in the
+ * business of deciding policy from natural language, which is exactly the
+ * inversion this architecture exists to avoid. The server already knows all
+ * three; it now says so in a field.
+ */
+export type TurnEvent =
+  | { type: "delta"; text: string }
+  /** A factual closure line, stated by the application and never the model. */
+  | { type: "closure"; sentence: string }
+  | {
+      type: "offer";
+      opportunityId: string;
+      entityName: string;
+      /** The EXACT stored bytes. Never rebuilt, never reformatted. */
+      renderedText: string;
+      /** The verbatim block as it is persisted into the message text. */
+      block: string;
+    }
+  /**
+   * The last event of every turn: what the reconnect looks like NOW.
+   *
+   * The browser replaces whatever card it was showing with exactly this, so a
+   * card cannot outlive the state it describes. Live acceptance found one that
+   * did - "Approved - on its way to John" was still on screen after John had
+   * replied - because the terminal state lived in the client, where nothing
+   * could correct it. It is the server's to say, every turn.
+   */
+  | { type: "state"; pendingOffer: PendingOffer | null };
+
 export type TurnResult = {
   conversationId: string;
   userMessageId: string;
-  /** Yields assistant text deltas; persists the assistant message on success. */
-  stream: AsyncIterable<string>;
+  /** Yields typed turn events; persists the assistant message on success. */
+  stream: AsyncIterable<TurnEvent>;
   /**
    * M5: set when THIS turn approved a send. The route performs the send after
    * the response is flushed, so the outbound leg never delays a reply.
@@ -197,7 +248,7 @@ export async function handleTurn(
       userMessageId: userMessage.id,
       closureSentence: closure?.sentence ?? null,
       closureId: closure?.closureId ?? null,
-      offerBlock: presenting?.block ?? null,
+      offer: presenting,
     }),
   };
 }
@@ -250,7 +301,7 @@ async function handleConsentTurn(
       userMessageId: input.userMessageId,
       closureSentence: null,
       closureId: null,
-      offerBlock: null,
+      offer: null,
     }),
   };
 }
@@ -281,31 +332,40 @@ async function* persistOnSuccess(
     /** M5: a factual closure line, stated by the application, not the model. */
     closureSentence: string | null;
     closureId: string | null;
-    /** M5: the verbatim offer block, appended after the model has finished. */
-    offerBlock: string | null;
+    /** M5: the offer, appended verbatim after the model has finished. */
+    offer: OfferResult & { outcome: "offered" | "represented" } | null;
   },
-): AsyncGenerator<string> {
+): AsyncGenerator<TurnEvent> {
   let full = "";
 
   if (turn.closureSentence !== null) {
-    const lead = `${turn.closureSentence}\n\n`;
-    full += lead;
-    yield lead;
+    // The persisted text is unchanged - lead sentence, blank line, then the
+    // model's reply. The event merely lets the browser show it as an update
+    // rather than as the opening words of a paragraph.
+    full += `${turn.closureSentence}\n\n`;
+    yield { type: "closure", sentence: turn.closureSentence };
   }
 
   for await (const delta of deltas) {
     full += delta;
-    yield delta;
+    yield { type: "delta", text: delta };
   }
 
   if (full.trim().length === 0) throw new EmptyCompletionError();
 
-  if (turn.offerBlock !== null) {
+  if (turn.offer !== null) {
     // The exact stored draft, inserted by application code. The model has not
-    // seen it and cannot have paraphrased it.
-    const block = `\n\n${turn.offerBlock}`;
-    full += block;
-    yield block;
+    // seen it and cannot have paraphrased it. The BLOCK still goes into the
+    // persisted message byte for byte; the event carries the same bytes in
+    // fields so the browser can draw a card instead of a paragraph.
+    full += `\n\n${turn.offer.block}`;
+    yield {
+      type: "offer",
+      opportunityId: turn.offer.opportunityId,
+      entityName: turn.offer.entityName,
+      renderedText: turn.offer.renderedText,
+      block: turn.offer.block,
+    };
   }
 
   const assistantMessage = await deps.messages.insert({
@@ -313,6 +373,10 @@ async function* persistOnSuccess(
     role: "assistant",
     content: full,
   });
+
+  // Read AFTER the turn's own writes, so an approval made moments ago is
+  // reflected rather than the state as it was when the turn began.
+  yield { type: "state", pendingOffer: await loadPendingOffer(deps, turn.userId) };
 
   await deps.jobs.createIngestJob(assistantMessage.id, {
     conversationId: turn.conversationId,
@@ -331,9 +395,46 @@ async function* persistOnSuccess(
   }
 }
 
+/**
+ * An offer the SERVER says is currently on the table.
+ *
+ * Derived from the opportunity row, not from the transcript. A reload must
+ * show the same card the stream drew, and the only trustworthy source for
+ * "is an offer open, for whom, and with which exact words" is the row that
+ * `markOffered` wrote.
+ */
+/**
+ * How far along this reconnect is, as the SERVER sees it.
+ *
+ * `offered`  - waiting for the person's answer. The only actionable state.
+ * `sending`  - they approved; the outbound leg runs after the reply is
+ *              flushed, so for that moment there is a real thing in flight.
+ *
+ * There is deliberately no state beyond these two. Once the request is
+ * authorized and the opportunity is consumed, the reconnect is no longer
+ * something the person can act on or is waiting on in the chat - the
+ * conversation itself carries the news, and a card that lingers can only say
+ * something that has stopped being true.
+ */
+export type PendingOfferState = "offered" | "sending";
+
+export type PendingOffer = {
+  opportunityId: string;
+  entityName: string;
+  state: PendingOfferState;
+  /** The EXACT stored bytes. */
+  renderedText: string;
+  /** The verbatim block as it appears at the end of the assistant message. */
+  block: string;
+};
+
 export type ConversationView = {
   conversationId: string | null;
   messages: StoredMessage[];
+  /** null when nothing is awaiting an answer. */
+  pendingOffer: PendingOffer | null;
+  /** The person's own label, when they have one. Never invented. */
+  displayName: string | null;
 };
 
 /** Read model for the chat page. */
@@ -341,12 +442,64 @@ export async function loadConversationView(
   deps: ConversationDataDeps,
   userId: string,
 ): Promise<ConversationView> {
-  const conversation = await deps.conversations.findLatest(userId);
-  if (!conversation) return { conversationId: null, messages: [] };
+  const [conversation, displayName, pendingOffer] = await Promise.all([
+    deps.conversations.findLatest(userId),
+    loadDisplayName(deps, userId),
+    loadPendingOffer(deps, userId),
+  ]);
+
+  if (!conversation) {
+    return { conversationId: null, messages: [], pendingOffer, displayName };
+  }
 
   const messages = await deps.messages.listRecent(
     conversation.id,
     chatConfig.recentTurnLimit,
   );
-  return { conversationId: conversation.id, messages };
+  return { conversationId: conversation.id, messages, pendingOffer, displayName };
+}
+
+async function loadDisplayName(
+  deps: ConversationDataDeps,
+  userId: string,
+): Promise<string | null> {
+  if (!deps.profiles) return null;
+  const profile = await deps.profiles.find(userId);
+  const name = profile?.displayName?.trim();
+  // A greeting with a blank name in it is worse than no greeting.
+  return name && name.length > 0 ? name : null;
+}
+
+async function loadPendingOffer(
+  deps: ConversationDataDeps,
+  userId: string,
+): Promise<PendingOffer | null> {
+  if (!deps.opportunities || !deps.entities) return null;
+
+  // `listOpenForUser` returns pre-terminal statuses only, which is exactly the
+  // window a card may describe. `declined`, `expired` and `consumed` are not
+  // open, so a resolved reconnect produces no card at all - including one
+  // whose family member has already replied.
+  const open = await deps.opportunities.listOpenForUser(
+    userId,
+    chatConfig.pendingOfferScanLimit,
+  );
+
+  // `offered` first: an answer the person still owes outranks one in flight.
+  // `drafted` has not been shown to anyone and must not appear as a card.
+  const current =
+    open.find((row) => row.status === "offered") ?? open.find((row) => row.status === "approved");
+  if (!current || current.renderedText === null) return null;
+
+  const entities = await deps.entities.listForUser(userId, chatConfig.pendingOfferScanLimit);
+  const entityName = entities.find((row) => row.id === current.entityId)?.displayName;
+  if (!entityName) return null;
+
+  return {
+    opportunityId: current.id,
+    entityName,
+    state: current.status === "offered" ? "offered" : "sending",
+    renderedText: current.renderedText,
+    block: buildOfferBlock({ entityName, renderedText: current.renderedText }),
+  };
 }

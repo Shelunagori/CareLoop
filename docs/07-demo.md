@@ -81,6 +81,10 @@ npm run dev
 
 ## C. The script
 
+> The chat page carries a **Reset demo** button in development. It runs the
+> same reset, seed and blank-conversation steps as the command above, through a
+> server action — the secret never reaches the browser.
+
 ### 1. Relational memory
 
 > **Type:** `Do you remember Simba?`
@@ -125,30 +129,37 @@ having a rhythm first.
 
 ### 4. The offer
 
-The chat shows, verbatim:
+A card appears:
 
 ```
-I can send John this message:
+RECONNECT WITH JOHN
 
-<the exact stored draft>
+Message to John
+┌──────────────────────────────────────────────┐
+│ Dad was wondering — are you and Simba able   │
+│ to visit soon?                               │
+└──────────────────────────────────────────────┘
 
-Would you like me to send it?
+[ Send message ]   [ Not now ]
 ```
 
 > *"The model never sees that draft. It gets a marker — an id, a name, a status
-> — and the application inserts the exact stored bytes around it. It cannot
-> paraphrase a message it was never given."*
+> — and the server sends the exact stored bytes to the browser as fields. The
+> page renders them; it does not compose them, and it never reads the
+> assistant's sentences to work out that an offer is on the table."*
 
 ### 5. Consent
 
-> **Type:** `yes`
+> **Press:** `Send message`
 
-Deterministic parse. `approve`, `decline` or `unclear`, and ambiguity never
-approves — "yes, but maybe later" is unclear and the offer stands.
+The button submits the word `yes` down the ordinary chat endpoint, into the
+same deterministic parser a typed answer meets. There is no button-only consent
+path. Typing `yes` works identically.
 
 > *"Before anything leaves CareLoop, George reads the exact outbound sentence
-> and says yes to that sentence — not to the idea of a message. And after the
-> approval there is no model anywhere in the send path."*
+> and says yes to that sentence. Ambiguity never approves — 'yes, but maybe
+> later' is unclear and the offer stands. And after the approval there is no
+> model anywhere in the send path."*
 
 ### 6. Delivery
 
@@ -165,8 +176,10 @@ The dev notifier stands in for SMS or email. Copy the `responseUrl`.
 
 ### 7. The family page
 
-Open the `responseUrl`. John sees a message from **Dad** and the exact approved
-sentence — no transcript, no history, no account needed.
+Open the `responseUrl` — worth doing at a phone width, since that is where it
+would really be read. John sees a message from **Dad**, the exact approved
+sentence, and one question: *Can you visit?* No transcript, no history, no
+account.
 
 > **Choose:** `Yes, we're visiting this weekend.`
 
@@ -177,9 +190,10 @@ sentence — no transcript, no history, no account needed.
 
 > **Back in George's chat, type:** `Any news?`
 
-Expect, as the first line:
+Expect an **Update** card above the reply:
 
 ```
+UPDATE
 John replied that they are planning to visit this weekend.
 ```
 
@@ -203,6 +217,9 @@ John replied that they are planning to visit this weekend.
 | 6 | Authorization is a transaction; delivery is transport |
 | 7 | Minimized payload, capability token, no account |
 | 8 | Deterministic closure — the loop is closed in data, not in prose |
+
+Total: three to five minutes, and it repeats from step A without touching the
+database.
 
 ---
 

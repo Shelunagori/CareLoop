@@ -11,7 +11,11 @@ import { resolveEntityMention, type KnownEntity } from "@/core/memory/resolve-en
 import { computeSalience } from "@/core/memory/salience";
 import { resolveTemporal } from "@/core/memory/temporal";
 import { episodeEmbeddingInput } from "@/core/memory/embedding-input";
-import { detectMentionedNames, renderEntityCard } from "@/core/memory/present";
+import {
+  detectMentionedNames,
+  renderEntityCard,
+  type EntityCard,
+} from "@/core/memory/present";
 import { isSelfReference, normalizeSelfEndpoint } from "@/core/memory/self-reference";
 
 const john: KnownEntity = {
@@ -326,5 +330,84 @@ describe("self-reference guard", () => {
     expect(normalizeSelfEndpoint(null)).toBeNull();
     expect(normalizeSelfEndpoint("John")).toBe("John");
     expect(normalizeSelfEndpoint("my son")).toBe("my son");
+  });
+});
+
+describe("entity names are identifiers, not style", () => {
+  /**
+   * The regression this closes.
+   *
+   * Live acceptance produced "Have you heard from Johnny?" about a person
+   * stored as John. Two things allowed it: the prompt said nothing about
+   * names, and the card listed them without saying which one was the person's.
+   * A name here is data - the product's whole claim is that it knows these
+   * people - so a companion that renames someone is guessing out loud.
+   *
+   * These tests are about the CONTRACT handed to the model. The behavioural
+   * assertion needs a real model and lives in tests/contract.
+   */
+  const card = (over: Partial<EntityCard> = {}): EntityCard => ({
+    name: "John",
+    type: "person",
+    subtype: null,
+    aliases: [],
+    relationToUser: { kind: "son", status: "confirmed" },
+    relatedEntities: [],
+    ...over,
+  });
+
+  it("states the name to use, exactly as stored", () => {
+    const rendered = renderEntityCard(card());
+    expect(rendered).toContain("name to use: John");
+    // The heading is the same string; nothing offers a second form.
+    expect(rendered.split("\n")[0]).toBe("John");
+  });
+
+  it("an entity with no aliases offers the model no alternative at all", () => {
+    const rendered = renderEntityCard(card({ aliases: [] }));
+    expect(rendered).not.toContain("other names on record");
+    for (const invented of ["Johnny", "Jon", "Jonathan", "Jonny"]) {
+      expect(rendered, invented).not.toContain(invented);
+    }
+    // The only name anywhere in the card is the stored one.
+    const names = rendered.match(/John\w*/g) ?? [];
+    expect(new Set(names)).toEqual(new Set(["John"]));
+  });
+
+  it("recorded aliases are labelled as recorded, never as alternatives to pick", () => {
+    const rendered = renderEntityCard(card({ aliases: ["Johnny"] }));
+    expect(rendered).toContain("name to use: John");
+    expect(rendered).toContain("other names on record: Johnny");
+    // "also called" read as a menu. It is gone.
+    expect(rendered).not.toContain("also called");
+  });
+
+  it("an alias never displaces the name to use on the card", () => {
+    const rendered = renderEntityCard(card({ aliases: ["Johnny", "Jonno"] }));
+    const lines = rendered.split("\n");
+    // Canonical first, alternates last, each on its own labelled line.
+    expect(lines[0]).toBe("John");
+    expect(lines[1]).toBe("- name to use: John");
+    expect(lines[lines.length - 1]).toBe("- other names on record: Johnny, Jonno");
+  });
+
+  it("holds for any name, including ones that invite shortening", () => {
+    for (const [stored, tempting] of [
+      ["Margaret", "Maggie"],
+      ["Elizabeth", "Liz"],
+      ["Simba", "Simmy"],
+      ["Robert", "Bob"],
+    ] as const) {
+      const rendered = renderEntityCard(card({ name: stored }));
+      expect(rendered, stored).toContain(`name to use: ${stored}`);
+      expect(rendered, tempting).not.toContain(tempting);
+    }
+  });
+
+  it("a pet's name is treated exactly like a person's", () => {
+    const rendered = renderEntityCard(
+      card({ name: "Simba", type: "pet", subtype: "dog", relationToUser: null }),
+    );
+    expect(rendered).toContain("name to use: Simba");
   });
 });

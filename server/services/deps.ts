@@ -44,7 +44,14 @@ import { loadMemoryForTurn } from "./memory-retrieval";
  */
 export function createConversationDataDeps(): ConversationDataDeps {
   const db = createServiceRoleClient();
-  return { conversations: conversationsRepo(db), messages: messagesRepo(db) };
+  return {
+    conversations: conversationsRepo(db),
+    messages: messagesRepo(db),
+    // Read-only, for the chat page: the pending offer and the greeting name.
+    opportunities: opportunitiesRepo(db),
+    entities: entitiesRepo(db),
+    profiles: profilesRepo(db),
+  };
 }
 
 export function createConversationDeps(): ConversationDeps {

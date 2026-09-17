@@ -3,6 +3,8 @@
  * scattered through call sites, so bounds are reviewable in one place.
  */
 export const chatConfig = {
+  /** Bounded scan for the chat page's pending-offer read. */
+  pendingOfferScanLimit: 50,
   /** Rejected above this length by the API's zod schema (characters). */
   maxMessageLength: 2_000,
   /**

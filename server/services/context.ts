@@ -1,7 +1,7 @@
 import type { ClosureMarker } from "@/core/family/closure";
 import type { LlmMessage } from "@/server/adapters/openai/types";
 import type { StoredMessage } from "@/server/repositories/messages";
-import { conversationPromptV1 } from "@/server/prompts/conversation.v1";
+import { conversationPromptV2 } from "@/server/prompts/conversation.v2";
 
 /**
  * Deterministic context assembly (docs/01 §2.1 step 3). No LLM, no I/O — this
@@ -154,14 +154,14 @@ export function assembleContext(input: {
   // The base prompt is never mutated. Memory is appended as a second system
   // message so an empty-memory turn is byte-identical to M1.
   const system: LlmMessage[] = [
-    { role: "system", content: conversationPromptV1.system },
+    { role: "system", content: conversationPromptV2.system },
   ];
   if (hasMemory(memory)) {
     system.push({ role: "system", content: renderMemory(memory) });
   }
 
   return {
-    promptRef: conversationPromptV1.ref,
+    promptRef: conversationPromptV2.ref,
     messages: [...system, ...turns],
   };
 }

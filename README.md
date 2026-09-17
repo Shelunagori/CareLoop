@@ -25,8 +25,10 @@ anything structural.
 | M2 | Ingestion, entity resolution, embeddings, memory retrieval | Complete |
 | M3 | Events, cadence and absence baselines | Complete |
 | M4 | Detection, suppression, reconnect drafting | Complete |
-| M5 | Exact-text consent and the family loop | Pending review and live acceptance |
-| M6 | — | Not started |
+| M5 | Exact-text consent and the family loop | Complete |
+| M6 | Deterministic demo fixture (George / John / Simba) | Complete |
+| M7 | Demo UX, accessibility and product polish | Pending review |
+x
 
 ## What it does
 
@@ -110,6 +112,8 @@ for that window messages a real person a second time.
 
 ## Setup
 
+Requires **Node 22 or newer** (`engines.node`, `.nvmrc`).
+
 ```bash
 npm install
 cp .env.example .env.local     # fill in Supabase and OpenAI values
@@ -135,7 +139,8 @@ they are transaction boundaries, not decisions.
 ## Checks
 
 ```bash
-npm run test        # 708 tests, 37 files
+npm run test        # 942 tests: pure core, services, real Postgres, and UI
+npm run test:ui     # the interface tests alone (jsdom)
 npm run lint        # includes the core/ purity boundary
 npm run typecheck
 npm run build

@@ -14,7 +14,8 @@
     "db:types:local": "supabase gen types typescript --local --schema public > server/db/types.generated.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:llm-contract": "vitest run --config vitest.contract.config.mts"
+    "test:llm-contract": "vitest run --config vitest.contract.config.mts",
+    "test:ui": "vitest run --project ui"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.7",
@@ -29,15 +30,23 @@
   "devDependencies": {
     "@electric-sql/pglite": "^0.2.17",
     "@tailwindcss/postcss": "^4",
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.7",
     "@types/node": "^22.20.3",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^5.2.0",
     "eslint": "^9",
     "eslint-config-next": "16.3.5",
     "fast-check": "^4.10.1",
+    "jsdom": "^26.1.0",
     "supabase": "^2.117.0",
     "tailwindcss": "^4",
     "typescript": "^5",
     "vitest": "^5.0.1"
+  },
+  "engines": {
+    "node": ">=22.0.0"
   }
 }

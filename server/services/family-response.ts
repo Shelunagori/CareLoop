@@ -1,3 +1,4 @@
+import type { ShareTopic } from "@/core/share/payload";
 import { z } from "zod";
 import type { Clock } from "@/server/adapters/clock";
 import type { Db } from "@/server/repositories/db";
@@ -43,6 +44,8 @@ export type FamilyView =
       /** The approved bytes, exactly as sent. */
       message: string;
       fromDisplayName: string;
+      /** The approved topic, so the page can ask the matching question. */
+      topic: ShareTopic;
       choices: FamilyReplyChoice[];
       alreadyAnswered: boolean;
     }
@@ -108,6 +111,9 @@ export async function loadFamilyView(
     // The stored approved bytes. Nothing reformats them on the way out.
     message: request.renderedBody,
     fromDisplayName: payload.fromDisplayName,
+    // Surfaced so the page can ask the right question. It is the SERVER's
+    // topic, from the approved payload, not something the page guesses.
+    topic: payload.topic,
     choices: replyChoicesFor(payload.topic),
     alreadyAnswered: existing !== null,
   };

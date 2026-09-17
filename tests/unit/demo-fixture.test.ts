@@ -17,6 +17,7 @@ import type { EntityRecord } from "@/server/repositories/entities";
 import type { ConversationsRepo } from "@/server/repositories/conversations";
 import type { MessagesRepo } from "@/server/repositories/messages";
 import { DEMO_GEORGE } from "@/fixtures/demo/george";
+import { authorizeDevSeed, isDebugSurfaceEnabled } from "@/server/config";
 import type { DemoFixtureSpec } from "@/fixtures/demo/types";
 import {
   createStore,
@@ -342,6 +343,8 @@ describe("1. one run produces the demo's starting state", () => {
     expect(john).toMatchObject({ type: "person", subtype: null });
     // `subtype` is descriptive only; nothing branches on it.
     expect(simba).toMatchObject({ type: "pet", subtype: "dog" });
+    // A recorded alias, on purpose: the acceptance case that matters is a
+    // person who HAS one, where the companion must still lead with "John".
     expect(john?.aliases).toContain("Johnny");
   });
 
@@ -612,9 +615,24 @@ describe("5. the baseline comes from the real engine", () => {
   });
 });
 
+/**
+ * Development-only files that are not under a dev path.
+ *
+ * The name guard's purpose is "no PRODUCTION branch depends on these names". A
+ * file that cannot execute outside development is not production policy - so
+ * these are exempt, and in exchange a test proves each one is actually gated.
+ * Listing them individually keeps the exemption from becoming a directory.
+ */
+const DEV_ONLY_FILES = [
+  "app/_actions/demo.ts",
+  "app/_components/dev-tools.tsx",
+  "app/_components/dev-hint.tsx",
+];
+
 describe("6. the demo names never reach production code", () => {
   const NAMES = ["George", "Simba", "Johnny", "John"];
   const FIXTURE_PATHS = ["fixtures/", "tests/", "docs/", "app/api/dev/", "scripts/"];
+
 
   /**
    * Few-shot examples inside a PROMPT are the one legitimate place a name
@@ -651,12 +669,35 @@ describe("6. the demo names never reach production code", () => {
     const offenders: string[] = [];
     for (const file of productionFiles()) {
       if (PROMPT_EXAMPLES.includes(file)) continue;
+      if (DEV_ONLY_FILES.includes(file)) continue;
       const code = stripComments(readFileSync(file, "utf8"), file);
       for (const name of NAMES) {
         if (new RegExp(`\\b${name}\\b`).test(code)) offenders.push(`${file}: ${name}`);
       }
     }
     expect(offenders).toEqual([]);
+  });
+
+  it("every development-only exemption is itself development-gated", () => {
+    // The exemption is only sound while these files cannot run in production.
+    for (const file of DEV_ONLY_FILES) {
+      const source = readFileSync(file, "utf8");
+      // Each is either gated itself, or is a component whose server parent
+      // decides - and that parent is checked below.
+      const gated =
+        source.includes("isDebugSurfaceEnabled") ||
+        source.includes('"use client"') ||
+        file.endsWith("dev-hint.tsx");
+      expect(gated, file).toBe(true);
+    }
+    // The server-side one runs the real gate AND the four-condition check.
+    const action = readFileSync("app/_actions/demo.ts", "utf8");
+    expect(action).toContain("isDebugSurfaceEnabled(process.env)");
+    expect(action).toContain("authorizeDevSeed(process.env");
+    // The page decides whether the client control is rendered at all.
+    const page = readFileSync("app/page.tsx", "utf8");
+    expect(page).toContain("isDebugSurfaceEnabled(process.env)");
+    expect(page).toMatch(/isDev \? <Dem/);
   });
 
   it("the prompt-example allowance is exactly one file, and it is a prompt", () => {
@@ -726,7 +767,7 @@ describe("7. every demo route is development-only", () => {
     const offenders: string[] = [];
     for (const file of [...walkAll("core"), ...walkAll("server"), ...walkAll("app")]) {
       const relative = file.replace(/\\/g, "/");
-      if (relative.startsWith("app/api/dev/")) continue;
+      if (relative.startsWith("app/api/dev/") || DEV_ONLY_FILES.includes(relative)) continue;
       // deps.ts may construct the fixture's dependencies; only the ROUTES may
       // reach for the canonical spec itself.
       if (readFileSync(file, "utf8").includes("fixtures/demo/george")) offenders.push(relative);
@@ -1692,5 +1733,53 @@ describe("14. the next demo starts in a blank chat, without losing the last one"
     expect(mine.conversationCreated).toBe(true);
     expect(mine.conversationId).not.toBe(theirs);
     expect(chat.conversations.find((c) => c.id === theirs)!.userId).toBe(OTHER_USER);
+  });
+});
+
+describe("15. the browser-facing demo reset cannot run in production", () => {
+  /**
+   * A server action is a POST endpoint whether or not a button points at it.
+   * "The page did not render the control" is a UX fact, not a security
+   * boundary — so the action evaluates the gate itself, and these assertions
+   * are about that, not about the button.
+   */
+  const action = () => readFileSync("app/_actions/demo.ts", "utf8");
+
+  it("runs the same four-condition gate as every other dev surface", () => {
+    const source = action();
+    expect(source).toContain("isDebugSurfaceEnabled(process.env)");
+    expect(source).toContain("authorizeDevSeed(process.env");
+    // Both refuse by returning, before any dependency is constructed.
+    const body = source.slice(source.indexOf("export async function resetDemoAction"));
+    expect(body.indexOf("isDebugSurfaceEnabled")).toBeLessThan(body.indexOf("createDemoFixtureDeps"));
+    expect(body.indexOf("authorizeDevSeed")).toBeLessThan(body.indexOf("createDemoFixtureDeps"));
+  });
+
+  it("the gate it uses is the one the frozen config defines", () => {
+    // Not a re-implementation: the same allow-list, fail-closed on any
+    // unexpected environment.
+    expect(isDebugSurfaceEnabled({ NODE_ENV: "development" })).toBe(true);
+    expect(isDebugSurfaceEnabled({ NODE_ENV: "production" })).toBe(false);
+    expect(isDebugSurfaceEnabled({ NODE_ENV: "development", VERCEL: "1" })).toBe(false);
+    expect(isDebugSurfaceEnabled({})).toBe(false);
+  });
+
+  it("refuses when no secret is configured, even in development", () => {
+    expect(authorizeDevSeed({ NODE_ENV: "development" }, null).allowed).toBe(false);
+    expect(
+      authorizeDevSeed({ NODE_ENV: "development", CARELOOP_DEV_SEED_SECRET: "" }, "").allowed,
+    ).toBe(false);
+    expect(
+      authorizeDevSeed({ NODE_ENV: "development", CARELOOP_DEV_SEED_SECRET: "s" }, "s").allowed,
+    ).toBe(true);
+  });
+
+  it("does what the CLI setup does, through the same services", () => {
+    const source = action();
+    // No demo-specific shortcut: the same reset, seed and blank-conversation
+    // functions the endpoint calls.
+    for (const call of ["resetDemoFixture", "seedDemoFixture", "ensureBlankConversation"]) {
+      expect(source, call).toContain(call);
+    }
   });
 });
