@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { renderEntityCard } from "@/core/memory/present";
-import { conversationPromptV2 } from "@/server/prompts/conversation.v2";
+import { conversationPromptV3 } from "@/server/prompts/conversation.v3";
 import { EMPTY_MEMORY, assembleContext } from "@/server/services/context";
 import type { StoredMessage } from "@/server/repositories/messages";
 
@@ -14,10 +14,10 @@ describe("assembleContext", () => {
       recentTurns: [turn("user", "hi", 1), turn("assistant", "hello", 2)],
     });
 
-    expect(context.promptRef).toBe("conversation.v2");
+    expect(context.promptRef).toBe("conversation.v3");
     expect(context.messages[0]).toEqual({
       role: "system",
-      content: conversationPromptV2.system,
+      content: conversationPromptV3.system,
     });
     expect(context.messages).toHaveLength(3);
   });
@@ -40,7 +40,7 @@ describe("assembleContext", () => {
     // What must be absent is a rendered memory SECTION, which is every message
     // other than the prompt and the turns themselves.
     const blob = context.messages
-      .filter((m) => m.content !== conversationPromptV2.system)
+      .filter((m) => m.content !== conversationPromptV3.system)
       .map((m) => m.content)
       .join("\n")
       .toLowerCase();
@@ -69,7 +69,7 @@ describe("assembleContext", () => {
     });
 
     // The base prompt is never mutated.
-    expect(context.messages[0].content).toBe(conversationPromptV2.system);
+    expect(context.messages[0].content).toBe(conversationPromptV3.system);
     expect(context.messages[1].role).toBe("system");
     expect(context.messages[1].content).toContain("preferred_drink: tea");
     expect(context.messages[1].content).toContain("Simba");
@@ -127,7 +127,7 @@ describe("names reach the model as data, not as style", () => {
    * "be warm and natural" instructions above it cannot quietly outrank.
    */
   it("the prompt states the rule, with the forbidden shapes named", () => {
-    const system = conversationPromptV2.system;
+    const system = conversationPromptV3.system;
     expect(system).toContain("name to use");
     expect(system).toContain("use the 'name to use' exactly as");
     // Every shape the review listed, so a future edit cannot drop one quietly.
@@ -149,7 +149,7 @@ describe("names reach the model as data, not as style", () => {
     // The rule is about which NAME is used, not about naming someone every
     // time. Forcing the proper name into every sentence reads like a system,
     // not a companion.
-    const system = conversationPromptV2.system;
+    const system = conversationPromptV3.system;
     expect(system).toContain("You do not have to name someone every time");
     expect(system).toContain("'him', 'her', 'they' are");
     expect(system).toContain("a relationship the notes actually record");
@@ -157,7 +157,7 @@ describe("names reach the model as data, not as style", () => {
   });
 
   it("the rule is scoped to recorded aliases, and to their use first", () => {
-    const system = conversationPromptV2.system;
+    const system = conversationPromptV3.system;
     expect(system).toContain("other names on record");
     expect(system).toContain("only if the user uses that recorded name first");
     // Never selected on the model's own initiative.
@@ -173,14 +173,14 @@ describe("names reach the model as data, not as style", () => {
     const { conversationPromptV1 } = await import("@/server/prompts/conversation.v1");
     expect(conversationPromptV1.ref).toBe("conversation.v1");
     expect(conversationPromptV1.system).not.toContain("name to use");
-    expect(conversationPromptV2.ref).toBe("conversation.v2");
+    expect(conversationPromptV3.ref).toBe("conversation.v3");
   });
 
   it("the prompt carries no example name from the demo fixture", () => {
     // The rule is generic. Coupling the prompt to the demo cast would be the
     // fixture leaking into shipped behaviour.
     for (const name of ["George", "John", "Johnny", "Simba"]) {
-      expect(conversationPromptV2.system, name).not.toContain(name);
+      expect(conversationPromptV3.system, name).not.toContain(name);
     }
   });
 
@@ -279,7 +279,7 @@ describe("an observable absence is not an emotional state", () => {
    * This is the CONTRACT. The behavioural assertion needs a live model and
    * lives in tests/contract.
    */
-  const system = conversationPromptV2.system;
+  const system = conversationPromptV3.system;
 
   it("separates what happened from how it felt, in so many words", () => {
     expect(system).toContain("Feelings are theirs to state");
@@ -399,7 +399,7 @@ describe("a verified update survives an ambiguous reply", () => {
    * Fixed in the prompt alone — no closure, consent, notifier, lifecycle,
    * memory or fixture change — because the evidence was already in context.
    */
-  const system = conversationPromptV2.system;
+  const system = conversationPromptV3.system;
 
   it("states that what was already said is a record, not a guess", () => {
     expect(system).toContain("What is already established");
@@ -476,6 +476,246 @@ describe("a verified update survives an ambiguous reply", () => {
 
   it("carries no fixture name", () => {
     for (const name of ["George", "John", "Johnny", "Simba"]) {
+      expect(system, name).not.toContain(name);
+    }
+  });
+});
+
+/**
+ * A reply that has arrived is not a reply still coming (M8 regression 2).
+ *
+ * Live acceptance showed the verified update - "John replied that they are
+ * planning to visit this weekend." - followed, in the same turn, by "I'll let
+ * you know when John replies." Both sentences reached the person at once, and
+ * one of them was false. The marker already said a reply had arrived; what it
+ * did not say was that the waiting was therefore OVER, and a model that has
+ * spent the whole conversation promising to pass on an answer will keep
+ * promising it unless something says stop.
+ */
+describe("a reply that has arrived ends the waiting", () => {
+  const closureContext = () =>
+    assembleContext({
+      recentTurns: [
+        {
+          id: "m1",
+          role: "user",
+          content: "thank you",
+          createdAt: new Date().toISOString(),
+        },
+      ],
+      memory: {
+        ...EMPTY_MEMORY,
+        pendingClosure: {
+          type: "family_response",
+          entityName: "John",
+          response: "yes",
+          timeframe: "this weekend",
+        },
+      },
+    });
+
+  const blobOf = (context: ReturnType<typeof assembleContext>) =>
+    context.messages.map((message) => message.content).join("\n");
+
+  it("says in so many words that nothing is still outstanding", () => {
+    const blob = blobOf(closureContext());
+    expect(blob).toContain("has already answered");
+    expect(blob).toContain("nothing is still outstanding");
+  });
+
+  it("names the three sentences that are now false", () => {
+    const blob = blobOf(closureContext()).toLowerCase();
+    for (const forbidden of [
+      "let them know when",
+      "still waiting",
+      "have not heard",
+    ]) {
+      expect(blob, forbidden).toContain(forbidden);
+    }
+  });
+
+  it("does not ban ordinary warmth in the same breath", () => {
+    // The rule is about the promise, not about being kind. A closure turn may
+    // still say "you're very welcome" or wish the visit well.
+    const blob = blobOf(closureContext());
+    expect(blob).toContain("respond warmly");
+  });
+
+  it("the standing rule is in the prompt, not only in the marker", () => {
+    // The marker is present for exactly one turn. The rule has to survive the
+    // turns after it, when the news is only in the transcript.
+    const system = conversationPromptV3.system;
+    expect(system).toContain("the waiting is over");
+    expect(system.toLowerCase()).toContain("still waiting");
+    for (const name of ["George", "John", "Simba"]) {
+      expect(system, name).not.toContain(name);
+    }
+  });
+});
+
+/**
+ * A recorded label is not a possessive (M8 regression 3).
+ *
+ * The card no longer glosses one, and the prompt has to say why, because the
+ * model is the thing that turned `family_pet` into "your dog". Neutral
+ * entities throughout: a rule that only works on the demo fixture is not a
+ * rule.
+ */
+describe("relationships reach the model with their direction intact", () => {
+  const petCard = () =>
+    renderEntityCard({
+      name: "Pepper",
+      type: "pet",
+      subtype: "dog",
+      aliases: [],
+      relationToUser: { kind: "family_pet", status: "confirmed" },
+      relatedEntities: [{ name: "Rowan", kind: "pet", status: "confirmed" }],
+    });
+
+  /** The memory message only: the base prompt NAMES the forbidden phrasings. */
+  const memoryBlock = () =>
+    assembleContext({
+      recentTurns: [
+        {
+          id: "m1",
+          role: "user",
+          content: "Do you remember Pepper?",
+          createdAt: new Date().toISOString(),
+        },
+      ],
+      memory: { ...EMPTY_MEMORY, entityCards: [petCard()] },
+    })
+      .messages.filter((message) => message.content !== conversationPromptV3.system)
+      .map((message) => message.content)
+      .join("\n");
+
+  it("both edges survive assembly, each with its source named", () => {
+    const assembled = memoryBlock();
+    expect(assembled).toContain("their recorded relationship to Pepper: family_pet");
+    expect(assembled).toContain("Rowan's recorded relationship to Pepper: pet");
+    // Nothing the model is told about Pepper reads as the user owning Pepper.
+    expect(assembled).not.toMatch(/their (family_)?pet\b/i);
+    expect(assembled).not.toMatch(/your dog\b/i);
+  });
+
+  it("the prompt forbids turning a label into ownership", () => {
+    const system = conversationPromptV3.system;
+    expect(system).toContain("family_pet");
+    expect(system.toLowerCase()).toContain("is not a possessive");
+    expect(system).toContain("does NOT make the animal theirs");
+  });
+
+  it("the prompt still permits a relationship the notes do record", () => {
+    // The rule narrows what may be claimed, not what may be said. "your son"
+    // stays available when an edge records it.
+    const system = conversationPromptV3.system;
+    expect(system).toContain("recorded relationship");
+    expect(system).toContain("'your daughter' is fine");
+  });
+
+  it("the rule carries no fixture name", () => {
+    for (const name of ["George", "John", "Simba", "Pepper", "Rowan"]) {
+      expect(conversationPromptV3.system, name).not.toContain(name);
+    }
+  });
+});
+
+/**
+ * "Who is Simba?" -> "a dog who is recorded as part of the family."
+ *
+ * Grounded, and thinner than the truth. The card carried both edges - the
+ * user's `family_pet` and the son's `pet` - and the answer used only the
+ * broader one. A companion that knows whose dog it is and does not say so is
+ * remembering badly, which is the thing this product claims to be good at.
+ *
+ * The data never needed changing. What was missing was a rule saying that a
+ * broad association does not stand in for a specific relationship, and that an
+ * identity question wants the specific one.
+ */
+describe("an identity question wants the most specific relationship", () => {
+  const system = conversationPromptV3.system;
+
+  it("names the questions the rule applies to", () => {
+    expect(system).toContain("Who is");
+    expect(system).toContain("Do you remember");
+    expect(system).toContain("How do I know");
+  });
+
+  it("says a broader association does not replace a specific one", () => {
+    expect(system).toContain("MOST SPECIFIC");
+    expect(system).toContain("never replaces a more specific one");
+    expect(system).toContain("give both");
+  });
+
+  it("bounds where an ownership claim may come from", () => {
+    // The permission is narrow on purpose: a confirmed edge from a named
+    // person, plus a type that supports the noun. Nothing else licenses it.
+    expect(system).toContain("recorded relationship to that animal is 'pet'");
+    expect(system).toContain("type or subtype");
+    expect(system).toContain("no recorded relationship names an owner");
+  });
+
+  it("the card gives the model everything that answer needs", () => {
+    // Neutral entities. Both edges, both directed, both attributed.
+    const card = renderEntityCard({
+      name: "Pepper",
+      type: "pet",
+      subtype: "dog",
+      aliases: [],
+      relationToUser: { kind: "family_pet", status: "confirmed" },
+      relatedEntities: [{ name: "Rowan", kind: "pet", status: "confirmed" }],
+    });
+    const assembled = assembleContext({
+      recentTurns: [
+        { id: "m1", role: "user", content: "Who is Pepper?", createdAt: new Date().toISOString() },
+      ],
+      memory: { ...EMPTY_MEMORY, entityCards: [card] },
+    })
+      .messages.filter((message) => message.content !== system)
+      .map((message) => message.content)
+      .join("\n");
+
+    // Enough for "Pepper is Rowan's dog and a family pet", and nothing more.
+    expect(assembled).toContain("pet (dog)");
+    expect(assembled).toContain("Rowan's recorded relationship to Pepper: pet");
+    expect(assembled).toContain("their recorded relationship to Pepper: family_pet");
+    expect(assembled).not.toMatch(/your dog\b/i);
+  });
+
+  it("the specific edge survives however many broader ones there are", () => {
+    // The `pet` edge must not be crowded out by household-level associations.
+    const card = renderEntityCard({
+      name: "Pepper",
+      type: "pet",
+      subtype: "dog",
+      aliases: [],
+      relationToUser: { kind: "family_pet", status: "confirmed" },
+      relatedEntities: [
+        { name: "Ash", kind: "family_pet", status: "confirmed" },
+        { name: "Rowan", kind: "pet", status: "confirmed" },
+      ],
+    });
+    expect(card).toContain("Rowan's recorded relationship to Pepper: pet");
+    expect(card).toContain("Ash's recorded relationship to Pepper: family_pet");
+    expect(card).toContain("their recorded relationship to Pepper: family_pet");
+  });
+
+  it("an unconfirmed owner edge is still marked as unconfirmed", () => {
+    // The ownership permission is spent on CONFIRMED edges. A candidate one
+    // reaches the model carrying its caveat, so the rule can bite.
+    const card = renderEntityCard({
+      name: "Pepper",
+      type: "pet",
+      subtype: "dog",
+      aliases: [],
+      relationToUser: null,
+      relatedEntities: [{ name: "Rowan", kind: "pet", status: "candidate" }],
+    });
+    expect(card).toContain("Rowan's recorded relationship to Pepper: pet (not yet confirmed)");
+  });
+
+  it("the rule carries no fixture name", () => {
+    for (const name of ["George", "John", "Simba", "Pepper", "Rowan", "Ash"]) {
       expect(system, name).not.toContain(name);
     }
   });

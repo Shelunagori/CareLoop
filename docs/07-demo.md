@@ -223,6 +223,43 @@ database.
 
 ---
 
+## D2. Speaking instead of typing (M8)
+
+Every step above works by keyboard. With a microphone, each one also works by
+voice, and the architecture does not change:
+
+| | |
+|---|---|
+| Press **Speak**, say the line, press **Stop** | the transcript appears **in the composer** |
+| Read it, then press **Send** | it goes down the ordinary `/api/chat` endpoint |
+| CareLoop replies | it is read aloud, if voice output is configured |
+
+> *"The transcript is shown before it is sent, on purpose. A microphone can
+> mishear a name, and a mishearing that turns itself into an approval is
+> exactly what you do not want in a consent flow."*
+
+At the reconnect card, say **"yes"**. It is transcribed to `yes`, shown, sent,
+and parsed by the same deterministic consent parser a typed `yes` meets.
+
+> *"There is no voice consent endpoint. If there were, there would be two
+> definitions of what counts as agreement, and only one of them would be the
+> one under test."*
+
+The speaker is authorized in the same spirit. The page asks for a **message**,
+not for words:
+
+```
+POST /api/voice/speak  { conversationId, source: { type, id } }
+```
+
+> *"The browser is not authoritative about what CareLoop said. If this endpoint
+> took a string, anyone with a session could use CareLoop's voice to say
+> something the person never saw and never approved."*
+
+If `ELEVENLABS_API_KEY` and `ELEVENLABS_VOICE_ID` are absent, speaking to
+CareLoop still works; only reading aloud is unavailable, and the speaker
+control says so rather than failing.
+
 ## E. What the demo does *not* claim
 
 CareLoop does not detect loneliness, depression, isolation or decline, and

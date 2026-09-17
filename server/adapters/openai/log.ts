@@ -15,6 +15,11 @@ export type ProviderLog = {
     | "llm.extract"
     | "llm.embed"
     | "llm.family_render"
+    // M8. Named for what they are rather than "llm.*": neither is a model
+    // deciding anything, and a log reader should be able to tell at a glance
+    // that no reasoning happened on these lines.
+    | "voice.transcribe"
+    | "voice.synthesize"
     | "ingest.job";
   outcome: string;
   latencyMs: number;

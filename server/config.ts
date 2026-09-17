@@ -45,6 +45,24 @@ export function familyRenderModel(): string {
   return process.env.OPENAI_FAMILY_RENDER_MODEL ?? chatModel();
 }
 
+/** M8: the transcription model. Pinned separately from chat and extraction. */
+export function transcriptionModel(): string {
+  return process.env.OPENAI_TRANSCRIPTION_MODEL?.trim() || "gpt-4o-mini-transcribe";
+}
+
+/**
+ * Whether text-to-speech is configured at all.
+ *
+ * Voice output is optional: CareLoop must remain fully usable - typed AND
+ * spoken input - when no synthesis credentials exist. The route answers a
+ * clean "unavailable" rather than a 500, and the browser hides the speaker.
+ */
+export type SpeechEnv = { ELEVENLABS_API_KEY?: string; ELEVENLABS_VOICE_ID?: string };
+
+export function isSpeechSynthesisConfigured(env: SpeechEnv = process.env): boolean {
+  return Boolean(env.ELEVENLABS_API_KEY?.trim() && env.ELEVENLABS_VOICE_ID?.trim());
+}
+
 export function embeddingModel(): string {
   return process.env.OPENAI_EMBEDDING_MODEL ?? "text-embedding-3-small";
 }

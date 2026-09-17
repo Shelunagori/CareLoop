@@ -79,6 +79,9 @@ function harness(store: M5Store, options: { chunks?: string[] } = {}) {
       llm,
       memory: async () => (await import("@/server/services/context")).EMPTY_MEMORY,
       consent,
+      // The turn's terminal `state` event is derived from these.
+      opportunities: services.consent.opportunities,
+      entities: services.consent.entities,
     },
   };
 }

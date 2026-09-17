@@ -23,6 +23,11 @@ export type ClosuresRepo = {
   /** Closures for this user that have not yet been told to them. */
   listUnsurfacedForUser(userId: string, limit: number): Promise<ClosureRecord[]>;
   findByResponse(responseId: string): Promise<ClosureRecord | null>;
+  /**
+   * M8. One closure, scoped to its owner through the opportunity - exactly the
+   * join `listUnsurfacedForUser` uses, and exactly what RLS does.
+   */
+  findOwnedById(id: string, userId: string): Promise<ClosureRecord | null>;
   /** Conditional on it not already having been surfaced. */
   markSurfaced(input: {
     id: string;
@@ -64,6 +69,17 @@ export function closuresRepo(db: Db): ClosuresRepo {
         .limit(limit);
       if (error) throw new Error(`listClosures failed: ${error.message}`);
       return (data ?? []).map((row) => toRecord(row as unknown as Row));
+    },
+
+    async findOwnedById(id, userId) {
+      const { data, error } = await db
+        .from("closures")
+        .select(`${SELECT}, reconnect_opportunities!inner(user_id)`)
+        .eq("id", id)
+        .eq("reconnect_opportunities.user_id", userId)
+        .maybeSingle();
+      if (error) throw new Error(`findOwnedClosure failed: ${error.message}`);
+      return data ? toRecord(data as unknown as Row) : null;
     },
 
     async findByResponse(responseId) {

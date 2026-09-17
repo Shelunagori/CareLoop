@@ -5,9 +5,14 @@
  *
  * Warm neutrals rather than cool greys, one restrained accent, and no
  * gradients. The people using this are older adults, so the defaults here are
- * deliberately larger and calmer than a developer tool's would be: 18px body
- * text, generous line height, and a focus ring that is genuinely visible
- * rather than a hairline.
+ * deliberately larger and calmer than a developer tool's would be - but only
+ * to a point. At an 18px root with 1.6 line height the interface asked to be
+ * viewed at 80% zoom, which is worse for everyone: fewer turns visible, more
+ * scrolling, and a browser setting standing between the person and the
+ * product. 17px and 1.5 is still well above a developer tool's defaults and
+ * looks right at 100%, where people actually are.
+ *
+ * Every size below is in rem, so this one number is the scale.
  */
 :root {
   --background: #fbf9f6;
@@ -34,7 +39,7 @@
 
 html {
   /* The floor for every rem-based size below. */
-  font-size: 18px;
+  font-size: 17px;
   -webkit-text-size-adjust: 100%;
 }
 
@@ -42,7 +47,7 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
-  line-height: 1.6;
+  line-height: 1.5;
   /* Nothing in this product should ever scroll sideways. */
   overflow-x: hidden;
 }

@@ -68,6 +68,23 @@ export function fakeRepos(options: {
   return {
     conversations,
     messages,
+    /**
+     * The read model behind the turn's terminal `state` event. Empty by
+     * default: an M1-shaped turn has no opportunities, and the event must
+     * still be able to LOOK rather than be silently unable to (M8 regression
+     * 1 - the composition root omitted these and every turn reported "no
+     * offer", retiring the card it had just drawn).
+     */
+    opportunities: {
+      async listOpenForUser() {
+        return [];
+      },
+    },
+    entities: {
+      async listForUser() {
+        return [];
+      },
+    },
     stored,
     get lastListRecentLimit() {
       return lastListRecentLimit;

@@ -18,7 +18,13 @@ export default defineConfig({
   test: {
     projects: [
       {
-        resolve: { alias: { "@": root } },
+        resolve: {
+          alias: {
+            "@": root,
+            // See tests/stubs/server-only.ts.
+            "server-only": path.join(root, "tests/stubs/server-only.ts"),
+          },
+        },
         test: {
           name: "node",
           environment: "node",

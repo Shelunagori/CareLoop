@@ -80,6 +80,19 @@ export type ConversationDeps = ConversationDataDeps & {
   jobs: JobsRepo;
   memory: MemoryLoader;
   consent?: ConsentTurnHooks;
+  /**
+   * REQUIRED here, though optional on the read model above.
+   *
+   * Every turn ends with a `state` event, and the browser treats it as the
+   * server's closing word on the reconnect - including `null`, which retires
+   * the card. Derived from these two. A turn path without them therefore ends
+   * by announcing that nothing is on the table, and the card the same turn
+   * just drew disappears a moment later while the opportunity stays open. It
+   * was optional, the composition root did not pass it, and that is exactly
+   * what happened (M8 regression 1). The type is what stops it recurring.
+   */
+  opportunities: Pick<OpportunitiesRepo, "listOpenForUser">;
+  entities: Pick<EntitiesRepo, "listForUser">;
 };
 
 export type TurnInput = {
@@ -127,7 +140,13 @@ export type TurnEvent =
    * replied - because the terminal state lived in the client, where nothing
    * could correct it. It is the server's to say, every turn.
    */
-  | { type: "state"; pendingOffer: PendingOffer | null };
+  /**
+   * The turn's closing word. `messageId` is the persisted assistant message,
+   * which is what text-to-speech refers to: speech names a server-owned
+   * object rather than carrying a sentence, so the browser never gets to say
+   * what CareLoop said (M8).
+   */
+  | { type: "state"; pendingOffer: PendingOffer | null; messageId: string };
 
 export type TurnResult = {
   conversationId: string;
@@ -376,7 +395,11 @@ async function* persistOnSuccess(
 
   // Read AFTER the turn's own writes, so an approval made moments ago is
   // reflected rather than the state as it was when the turn began.
-  yield { type: "state", pendingOffer: await loadPendingOffer(deps, turn.userId) };
+  yield {
+    type: "state",
+    pendingOffer: await loadPendingOffer(deps, turn.userId),
+    messageId: assistantMessage.id,
+  };
 
   await deps.jobs.createIngestJob(assistantMessage.id, {
     conversationId: turn.conversationId,
@@ -470,7 +493,7 @@ async function loadDisplayName(
   return name && name.length > 0 ? name : null;
 }
 
-async function loadPendingOffer(
+export async function loadPendingOffer(
   deps: ConversationDataDeps,
   userId: string,
 ): Promise<PendingOffer | null> {

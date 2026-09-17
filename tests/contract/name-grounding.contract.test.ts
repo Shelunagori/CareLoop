@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { conversationPromptV2 } from "@/server/prompts/conversation.v2";
+import { conversationPromptV3 } from "@/server/prompts/conversation.v3";
 import { renderEntityCard } from "@/core/memory/present";
 import { assembleContext, EMPTY_MEMORY } from "@/server/services/context";
 import { createOpenAiLlm } from "@/server/adapters/openai/llm";
@@ -66,7 +66,7 @@ async function reply(
 
 describe("the live model keeps a stored name", () => {
   it("uses the prompt version that carries the rule", () => {
-    expect(contextFor("hello", []).promptRef).toBe(conversationPromptV2.ref);
+    expect(contextFor("hello", []).promptRef).toBe(conversationPromptV3.ref);
   });
 
   it("never invents a diminutive for an entity with no recorded alias", async () => {

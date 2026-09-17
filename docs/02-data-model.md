@@ -116,6 +116,16 @@ Keeping them orthogonal costs one column and no extra machinery — and
 deliberately stops short of a real ontology: `subtype` is freeform descriptive
 text with no behaviour attached to it.
 
+**And an edge keeps its direction all the way to the prompt.** M8 acceptance
+asked "Do you remember Simba?" and got "your dog". Nothing in the data said so:
+the user's edge is `family_pet` and the only `pet` edge is John's. The entity
+card was rendering the user's edge as "their family_pet" — a possessive, and a
+possessive of an animal is ownership in any reading. Cards now name the source
+of every edge (`their recorded relationship to Simba: family_pet`, `John's
+recorded relationship to Simba: pet`) and quote the stored label rather than
+glossing it, so the presentation layer no longer makes a claim the rows do not
+contain.
+
 **Why `observations` is separate and immutable:** it is the boundary between
 "the model said" and "the system believes". Keeping raw extraction forever gives
 us (a) an audit trail when a memory turns out wrong, (b) the ability to replay

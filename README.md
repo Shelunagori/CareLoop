@@ -27,7 +27,8 @@ anything structural.
 | M4 | Detection, suppression, reconnect drafting | Complete |
 | M5 | Exact-text consent and the family loop | Complete |
 | M6 | Deterministic demo fixture (George / John / Simba) | Complete |
-| M7 | Demo UX, accessibility and product polish | Pending review |
+| M7 | Demo UX, accessibility and product polish | Complete |
+| M8 | Push-to-talk voice | Pending review |
 x
 
 ## What it does
@@ -110,6 +111,40 @@ delivered" — unfinished transport, which a retry fixes. Consuming after
 delivery would instead leave "delivered but consent still live", and the retry
 for that window messages a real person a second time.
 
+### The card is the server's word, not the model's
+
+A reconnect offer reaches the browser as FIELDS — recipient, exact stored
+draft, opportunity id — and the turn ends with a `state` event that is the
+server's closing word on the reconnect, `null` included. That makes the event
+load-bearing: a turn path that cannot read the pending offer ends every turn by
+saying there is none, and the card it just drew disappears while the
+opportunity stays open. The turn's dependencies require that read model, so
+omitting it is a compile error rather than a vanishing card.
+
+### Voice is I/O, not a second brain
+
+```
+microphone → speech-to-text → the SAME chat pipeline → assistant text → speech
+```
+
+A spoken "yes" is transcribed, shown to the person, and sent through the
+ordinary chat endpoint into the same deterministic consent parser a typed one
+meets. There is no voice conversation engine, no voice consent path and no
+second model. Raw audio is never stored: it exists for one request and is
+replaced by a transcript.
+
+Speech output is authorized the same way. The browser does not send a sentence
+to be spoken — it sends a **reference** to something the server already
+produced and showed (an assistant message, the offer on the table, a closure).
+The server resolves it, proves it belongs to the caller and derives the words
+from storage, so "CareLoop only speaks what CareLoop said" is a property of the
+endpoint rather than a convention the client is trusted to follow.
+
+Reading replies aloud needs `ELEVENLABS_API_KEY` and `ELEVENLABS_VOICE_ID`.
+Without them the provider is constructed as one that declines: the application
+boots, typed chat and transcription are untouched, and only `/api/voice/speak`
+answers `503`.
+
 ## Setup
 
 Requires **Node 22 or newer** (`engines.node`, `.nvmrc`).
@@ -139,7 +174,7 @@ they are transaction boundaries, not decisions.
 ## Checks
 
 ```bash
-npm run test        # 942 tests: pure core, services, real Postgres, and UI
+npm run test        # 991 tests: pure core, services, real Postgres, and UI
 npm run test:ui     # the interface tests alone (jsdom)
 npm run lint        # includes the core/ purity boundary
 npm run typecheck

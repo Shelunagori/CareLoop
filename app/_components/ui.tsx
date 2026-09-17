@@ -17,8 +17,9 @@ type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
 };
 
 /**
- * `min-h-[3rem]` is 54px at the 18px root: comfortably past the 44px target,
- * because these are pressed by people whose aim is not always precise.
+ * `min-h-[2.75rem]` is 47px at the 17px root: past the 44px target, because
+ * these are pressed by people whose aim is not always precise, without being
+ * the tallest thing on the screen.
  */
 export function Button({
   variant = "primary",
@@ -30,7 +31,7 @@ export function Button({
   ...rest
 }: ButtonProps) {
   const base =
-    "inline-flex min-h-[3rem] items-center justify-center rounded-xl px-6 py-3 text-[1rem] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50";
+    "inline-flex min-h-[2.75rem] items-center justify-center rounded-xl px-5 py-2.5 text-[0.95rem] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50";
   const skin =
     variant === "primary"
       ? "bg-[var(--color-accent)] text-white hover:bg-[#35594a]"
@@ -57,7 +58,7 @@ export function Card({
   return (
     <div
       {...rest}
-      className={`rounded-2xl border border-[var(--color-line)] bg-[var(--color-surface)] p-5 sm:p-6 ${className}`}
+      className={`rounded-2xl border border-[var(--color-line)] bg-[var(--color-surface)] p-4 sm:p-5 ${className}`}
     >
       {children}
     </div>
@@ -67,7 +68,7 @@ export function Card({
 /** The quiet label above a card: "Reconnect with John", "Update from John". */
 export function CardLabel({ children }: { children: ReactNode }) {
   return (
-    <p className="text-[0.95rem] font-semibold tracking-wide text-[var(--color-muted)] uppercase">
+    <p className="text-[0.85rem] font-semibold tracking-wide text-[var(--color-muted)] uppercase">
       {children}
     </p>
   );
@@ -80,7 +81,7 @@ export function CardLabel({ children }: { children: ReactNode }) {
  */
 export function QuotedText({ children }: { children: ReactNode }) {
   return (
-    <p className="rounded-xl bg-[var(--color-accent-soft)] px-4 py-4 text-[1.15rem] leading-relaxed whitespace-pre-wrap break-words text-[var(--color-foreground)]">
+    <p className="rounded-xl bg-[var(--color-accent-soft)] px-4 py-3.5 text-[1.05rem] leading-normal whitespace-pre-wrap break-words text-[var(--color-foreground)]">
       {children}
     </p>
   );

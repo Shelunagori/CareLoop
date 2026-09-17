@@ -283,7 +283,7 @@ describe("presentation", () => {
     });
     expect(card).toContain("Simba");
     expect(card).toContain("pet (dog)");
-    expect(card).toContain("pet of John");
+    expect(card).toContain("John's recorded relationship to Simba: pet");
     expect(card).toContain("not yet confirmed");
   });
 
@@ -409,5 +409,87 @@ describe("entity names are identifiers, not style", () => {
       card({ name: "Simba", type: "pet", subtype: "dog", relationToUser: null }),
     );
     expect(rendered).toContain("name to use: Simba");
+  });
+});
+
+/**
+ * Relationships keep their direction (M8 regression 3).
+ *
+ * Live acceptance: "Do you remember Simba?" -> "Yes, I remember Simba, your
+ * dog." The stored relationships said otherwise - the user's edge to Simba is
+ * `family_pet`, and the only `pet` edge belongs to John. Nothing in the data
+ * was wrong. The CARD was: it rendered the user's edge as "their family_pet",
+ * a possessive, and a possessive of an animal is ownership in any reading.
+ *
+ * The fix is to stop glossing a stored label as a possessive at all. A label
+ * is a record; turning `family_pet` into "your dog" is the presentation layer
+ * making a claim the data does not contain.
+ */
+describe("relationships keep their direction", () => {
+  const card = (input: {
+    name: string;
+    subtype?: string | null;
+    toUser?: string | null;
+    related?: Array<{ name: string; kind: string }>;
+  }) =>
+    renderEntityCard({
+      name: input.name,
+      type: "pet",
+      subtype: input.subtype ?? "dog",
+      aliases: [],
+      relationToUser: input.toUser ? { kind: input.toUser, status: "confirmed" } : null,
+      relatedEntities: (input.related ?? []).map((r) => ({ ...r, status: "confirmed" as const })),
+    });
+
+  it("A -> B family_pet does not read as A owning B", () => {
+    // Neutral entities: nothing here is the demo fixture.
+    const rendered = card({ name: "Pepper", toUser: "family_pet" });
+    expect(rendered).not.toMatch(/their (family_)?pet\b/i);
+    expect(rendered).not.toMatch(/their dog\b/i);
+    // The label survives verbatim, attributed to them as a RELATIONSHIP.
+    expect(rendered).toContain("family_pet");
+    expect(rendered).toContain("their recorded relationship to Pepper: family_pet");
+  });
+
+  it("C -> B pet names C as the source of the relationship", () => {
+    const rendered = card({ name: "Pepper", related: [{ name: "Rowan", kind: "pet" }] });
+    expect(rendered).toContain("Rowan's recorded relationship to Pepper: pet");
+  });
+
+  it("both edges coexist without either absorbing the other", () => {
+    const rendered = card({
+      name: "Pepper",
+      toUser: "family_pet",
+      related: [{ name: "Rowan", kind: "pet" }],
+    });
+    expect(rendered).toContain("their recorded relationship to Pepper: family_pet");
+    expect(rendered).toContain("Rowan's recorded relationship to Pepper: pet");
+    expect(rendered).not.toMatch(/their (family_)?pet\b/i);
+  });
+
+  it("a relationship the user really does hold is still theirs", () => {
+    // The rule is about possessives invented from a label, not about hiding
+    // relationships: `son` is still rendered, and "your son" stays available.
+    const rendered = renderEntityCard({
+      name: "Rowan",
+      type: "person",
+      subtype: null,
+      aliases: [],
+      relationToUser: { kind: "son", status: "confirmed" },
+      relatedEntities: [],
+    });
+    expect(rendered).toContain("their recorded relationship to Rowan: son");
+  });
+
+  it("an unconfirmed edge is still marked unconfirmed", () => {
+    const rendered = renderEntityCard({
+      name: "Pepper",
+      type: "pet",
+      subtype: "dog",
+      aliases: [],
+      relationToUser: { kind: "family_pet", status: "candidate" },
+      relatedEntities: [{ name: "Rowan", kind: "pet", status: "candidate" }],
+    });
+    expect(rendered.match(/not yet confirmed/g) ?? []).toHaveLength(2);
   });
 });

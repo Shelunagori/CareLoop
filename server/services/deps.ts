@@ -1,6 +1,10 @@
 import "server-only";
 import { systemClock } from "@/server/adapters/clock";
 import { demoFixtureRepo } from "@/server/repositories/demo-fixture";
+import { createOpenAiTranscription } from "@/server/adapters/openai/transcription";
+import { createElevenLabsVoice } from "@/server/adapters/elevenlabs/voice";
+import type { SynthesisDeps, TranscriptionDeps } from "@/server/services/voice";
+import type { SpeakableDeps } from "@/server/services/speakable";
 import type { DemoFixtureDeps } from "@/server/services/demo-fixture";
 import { createOpenAiEmbeddings } from "@/server/adapters/openai/embeddings";
 import { createOpenAiExtraction } from "@/server/adapters/openai/extraction";
@@ -74,6 +78,11 @@ export function createConversationDeps(): ConversationDeps {
     // M5. The hot path gets four small functions, not the family loop's
     // repositories.
     consent: buildConsentHooks(createConsentHookSource(db)),
+    // The read model behind the turn's terminal `state` event. Without these
+    // the event reports "no offer" on every turn and the reconnect card is
+    // retired the instant it is drawn (M8 regression 1).
+    opportunities: opportunitiesRepo(db),
+    entities: entitiesRepo(db),
   };
 }
 
@@ -174,6 +183,38 @@ export function createBaselineDebugDeps(): BaselineDebugDeps {
  * The development-only demo fixture. Constructed nowhere but the demo routes,
  * so the delete surface it carries cannot be reached from the product.
  */
+/** M8 voice I/O. Constructed only by the two voice routes. */
+export function createTranscriptionDeps(): TranscriptionDeps {
+  return { speechToText: createOpenAiTranscription() };
+}
+
+/**
+ * Never throws when ElevenLabs is unconfigured: the adapter returns a provider
+ * that declines, so an optional capability cannot break composition. See
+ * server/adapters/openai/types.ts.
+ */
+export function createSynthesisDeps(): SynthesisDeps {
+  return { voice: createElevenLabsVoice() };
+}
+
+/**
+ * What the speak endpoint is allowed to read. Repositories only - there is no
+ * model here, and nothing that could produce a sentence rather than find one.
+ */
+export function createSpeakableDeps(): SpeakableDeps {
+  const db = createServiceRoleClient();
+  return {
+    clock: systemClock,
+    conversations: conversationsRepo(db),
+    messages: messagesRepo(db),
+    opportunities: opportunitiesRepo(db),
+    entities: entitiesRepo(db),
+    closures: closuresRepo(db),
+    familyRequests: familyRequestsRepo(db),
+    familyResponses: familyResponsesRepo(db),
+  };
+}
+
 export function createDemoFixtureDeps(): DemoFixtureDeps {
   const db = createServiceRoleClient();
   return {

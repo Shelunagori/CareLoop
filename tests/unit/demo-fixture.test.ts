@@ -828,7 +828,13 @@ describe("8. the fixture makes the demo's memory answers possible", () => {
     expect(card).toBeTruthy();
     // Enough for a grounded "Simba is John's dog", and nothing more.
     expect(card).toContain("pet (dog)");
-    expect(card).toContain("pet of John");
+    expect(card).toContain("John's recorded relationship to Simba: pet");
+    // The user's own edge is household membership, and it stays that way. Live
+    // acceptance turned it into "your dog"; the card no longer offers that
+    // reading to anything downstream (M8 regression 3).
+    expect(card).toContain("their recorded relationship to Simba: family_pet");
+    expect(card).not.toMatch(/their (family_)?pet\b/i);
+    expect(card).not.toMatch(/your dog\b/i);
     // A confirmed edge renders unmarked; an unconfirmed one carries a caveat.
     // The absence of that caveat IS the confirmation showing through.
     expect(card).not.toContain("not yet confirmed");

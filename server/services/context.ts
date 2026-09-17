@@ -1,7 +1,7 @@
 import type { ClosureMarker } from "@/core/family/closure";
 import type { LlmMessage } from "@/server/adapters/openai/types";
 import type { StoredMessage } from "@/server/repositories/messages";
-import { conversationPromptV2 } from "@/server/prompts/conversation.v2";
+import { conversationPromptV3 } from "@/server/prompts/conversation.v3";
 
 /**
  * Deterministic context assembly (docs/01 §2.1 step 3). No LLM, no I/O — this
@@ -77,6 +77,15 @@ function renderClosure(marker: ClosureMarker): string[] {
     "You have ALREADY told them this, in the first line of your reply. Do not",
     "repeat it, do not add detail, and do not guess how anyone feels about it.",
     "Simply respond warmly to whatever they say about it.",
+    // The live failure this exists to stop: the verified update and "I'll let
+    // you know when John replies" arriving in the same turn. The marker said a
+    // reply had come; it did not say the waiting was therefore over, and a
+    // model that has been promising to pass on an answer keeps promising it.
+    "This reply has ARRIVED. The waiting is over: nothing is still outstanding",
+    `about this message, because ${marker.entityName} has already answered it.`,
+    "Do not say you will let them know when there is news, do not say you are",
+    "still waiting to hear, and do not say you have not heard yet. All three",
+    "are now false.",
   ];
 }
 
@@ -154,14 +163,14 @@ export function assembleContext(input: {
   // The base prompt is never mutated. Memory is appended as a second system
   // message so an empty-memory turn is byte-identical to M1.
   const system: LlmMessage[] = [
-    { role: "system", content: conversationPromptV2.system },
+    { role: "system", content: conversationPromptV3.system },
   ];
   if (hasMemory(memory)) {
     system.push({ role: "system", content: renderMemory(memory) });
   }
 
   return {
-    promptRef: conversationPromptV2.ref,
+    promptRef: conversationPromptV3.ref,
     messages: [...system, ...turns],
   };
 }

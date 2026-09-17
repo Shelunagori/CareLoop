@@ -236,6 +236,14 @@ export function fakeClosures(store: M5Store): ClosuresRepo {
     async findByResponse(responseId) {
       return store.familyClosures.find((c) => c.responseId === responseId) ?? null;
     },
+    async findOwnedById(id, userId) {
+      // Ownership through the opportunity, exactly as the join does.
+      const owned = new Set(
+        store.opportunities.filter((o) => o.userId === userId).map((o) => o.id),
+      );
+      const row = store.familyClosures.find((c) => c.id === id);
+      return row && owned.has(row.opportunityId) ? row : null;
+    },
     async markSurfaced({ id, messageId, now }) {
       const row = store.familyClosures.find((c) => c.id === id);
       if (!row || row.surfacedAt !== null) return null;

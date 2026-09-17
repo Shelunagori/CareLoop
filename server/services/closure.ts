@@ -1,6 +1,6 @@
 import type { Clock } from "@/server/adapters/clock";
 import { familyConfig } from "@/server/config";
-import type { ClosuresRepo } from "@/server/repositories/closures";
+import type { ClosureRecord, ClosuresRepo } from "@/server/repositories/closures";
 import type { EntitiesRepo } from "@/server/repositories/entities";
 import type { FamilyRequestsRepo } from "@/server/repositories/family-requests";
 import type { FamilyResponsesRepo } from "@/server/repositories/family-responses";
@@ -56,14 +56,39 @@ export async function loadPendingClosure(
   );
   const closure = pending[0];
   if (!closure) return null;
+  return describeClosure(deps, closure, input.userId);
+}
 
+/**
+ * The same closure, addressed by id (M8).
+ *
+ * Reading a closure aloud has to produce the sentence the person was shown,
+ * and the only way to guarantee that is to DERIVE it again from the same rows
+ * through the same renderer, rather than letting a caller hand over a string.
+ * Scoped through the opportunity, so a closure belonging to someone else is
+ * indistinguishable from one that does not exist.
+ */
+export async function loadClosureById(
+  deps: ClosureDeps,
+  input: { closureId: string; userId: string },
+): Promise<PendingClosure | null> {
+  const closure = await deps.closures.findOwnedById(input.closureId, input.userId);
+  if (!closure) return null;
+  return describeClosure(deps, closure, input.userId);
+}
+
+async function describeClosure(
+  deps: ClosureDeps,
+  closure: ClosureRecord,
+  userId: string,
+): Promise<PendingClosure | null> {
   const response = await deps.familyResponses.findById(closure.responseId);
   if (!response) return null;
 
   const reply = FamilyReplySchema.safeParse(response.parsed);
   if (!reply.success) return null;
 
-  const opportunity = await deps.opportunities.findOwnedById(closure.opportunityId, input.userId);
+  const opportunity = await deps.opportunities.findOwnedById(closure.opportunityId, userId);
   if (!opportunity) return null;
 
   const request = await deps.familyRequests.findByOpportunity(opportunity.id);
@@ -72,7 +97,7 @@ export async function loadPendingClosure(
   const payload = SharePayloadSchema.safeParse(request.payload);
   if (!payload.success) return null;
 
-  const entities = await deps.entities.listForUser(input.userId, ENTITY_SCAN_LIMIT);
+  const entities = await deps.entities.listForUser(userId, ENTITY_SCAN_LIMIT);
   const entityName =
     entities.find((entity) => entity.id === opportunity.entityId)?.displayName ?? null;
   if (entityName === null) return null;

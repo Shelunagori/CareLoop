@@ -62,11 +62,26 @@ export function renderEntityCard(card: EntityCard): string {
   const lines = [`${card.name}`];
   lines.push(`- name to use: ${card.name}`);
   lines.push(`- ${card.type}${card.subtype ? ` (${card.subtype})` : ""}`);
+  // Relationships are rendered as DIRECTED records, never as possessives.
+  //
+  // Live acceptance produced "Simba, your dog" for an animal whose only `pet`
+  // edge belongs to the user's son; the user's own edge is `family_pet`. The
+  // data was right and the card was wrong - it said "their family_pet", and a
+  // possessive of an animal is ownership however the label reads. Naming the
+  // source of each edge, and quoting the label rather than glossing it, leaves
+  // nothing for a model to collapse: `family_pet` is a relationship to the
+  // household, `pet` is one person's, and the card no longer decides which.
   if (card.relationToUser) {
-    lines.push(`- their ${card.relationToUser.kind}${renderStatus(card.relationToUser.status)}`);
+    lines.push(
+      `- their recorded relationship to ${card.name}: ${card.relationToUser.kind}` +
+        renderStatus(card.relationToUser.status),
+    );
   }
   for (const related of card.relatedEntities) {
-    lines.push(`- ${related.kind} of ${related.name}${renderStatus(related.status)}`);
+    lines.push(
+      `- ${related.name}'s recorded relationship to ${card.name}: ${related.kind}` +
+        renderStatus(related.status),
+    );
   }
   if (card.aliases.length > 0) {
     // "on record" and not "also called": confirmed alternates that are in the

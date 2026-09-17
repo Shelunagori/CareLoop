@@ -14,12 +14,12 @@ export default async function Page() {
 
   if (!userId) {
     return (
-      <main className="mx-auto max-w-xl space-y-4 px-6 py-16">
-        <h1 className="text-[1.6rem] font-semibold tracking-tight">CareLoop</h1>
+      <main className="mx-auto max-w-xl space-y-3 px-6 py-10">
+        <h1 className="text-[1.7rem] font-semibold tracking-tight">CareLoop</h1>
         <p className="text-[var(--color-muted)]">
           No signed-in companion user. Sign-in arrives in a later milestone.
         </p>
-        <p className="text-[0.95rem] text-[var(--color-muted)]">
+        <p className="text-[0.9rem] text-[var(--color-muted)]">
           For local development, create a user in the Supabase dashboard
           (Authentication → Users → Add user) and set its UUID as{" "}
           <code className="rounded bg-[var(--color-surface-muted)] px-1">
