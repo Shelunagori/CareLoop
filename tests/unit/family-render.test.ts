@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { fixedClock } from "@/server/adapters/clock";
 import { chatModel, familyRenderModel } from "@/server/config";
+import { familyRenderPromptV1 } from "@/server/prompts/family-render.v1";
 import {
-  buildFamilyRenderMessages,
-  familyRenderPromptV1,
-} from "@/server/prompts/family-render.v1";
+  buildFamilyRenderMessagesV2,
+  familyRenderPromptV2,
+} from "@/server/prompts/family-render.v2";
 import { serializeSharePayload, type SharePayload } from "@/core/share/payload";
 import { buildFallbackText } from "@/core/share/fallback";
 import { sha256Hex } from "@/core/share/text-hash";
@@ -25,9 +26,9 @@ afterEach(() => {
 
 describe("1. the renderer's complete runtime input", () => {
   it("is the system prompt plus the serialized payload, and nothing else", () => {
-    const messages = buildFamilyRenderMessages(PAYLOAD);
+    const messages = buildFamilyRenderMessagesV2(PAYLOAD);
     expect(messages).toHaveLength(2);
-    expect(messages[0]).toEqual({ role: "system", content: familyRenderPromptV1.system });
+    expect(messages[0]).toEqual({ role: "system", content: familyRenderPromptV2.system });
     expect(messages[1]).toEqual({ role: "user", content: serializeSharePayload(PAYLOAD) });
   });
 
@@ -35,24 +36,45 @@ describe("1. the renderer's complete runtime input", () => {
     // The port's request type is { promptRef, payload }. There is no
     // `messages`, no `history` and no free text — the guarantee is structural,
     // not a matter of this call site being careful.
-    const serialized = JSON.stringify(buildFamilyRenderMessages(PAYLOAD));
+    const serialized = JSON.stringify(buildFamilyRenderMessagesV2(PAYLOAD));
     expect(serialized).not.toContain("assistant");
-    expect(buildFamilyRenderMessages(PAYLOAD).map((m) => m.role)).toEqual(["system", "user"]);
+    expect(buildFamilyRenderMessagesV2(PAYLOAD).map((m) => m.role)).toEqual(["system", "user"]);
   });
 
   it("is versioned, and the version is what gets logged", () => {
+    expect(familyRenderPromptV2.ref).toBe("family-render.v2");
+    expect(familyRenderPromptV2.id).toBe("family-render");
+    expect(familyRenderPromptV2.version).toBe("v2");
+  });
+
+  it("v1 is kept, unedited, because a prompt ref must stay explicable", () => {
+    // A draft rendered before the bump has `family-render.v1` in its log line.
+    // Deleting or editing v1 would make that line a lie.
     expect(familyRenderPromptV1.ref).toBe("family-render.v1");
-    expect(familyRenderPromptV1.id).toBe("family-render");
     expect(familyRenderPromptV1.version).toBe("v1");
+    expect(familyRenderPromptV2.system).not.toBe(familyRenderPromptV1.system);
   });
 
   it("instructs against exactly the things the guard enforces", () => {
-    const system = familyRenderPromptV1.system.toLowerCase();
+    const system = familyRenderPromptV2.system.toLowerCase();
     for (const topic of ["mood", "loneliness", "health", "monitoring", "days"]) {
       expect(system).toContain(topic);
     }
     // And it says what it is: a renderer, not an author.
     expect(system).toContain("renderer, not an author");
+  });
+
+  it("states the visit relation explicitly — the gap that caused the inversion", () => {
+    const system = familyRenderPromptV2.system.toLowerCase();
+    // v1 never said WHO was being visited, so the nearest noun won.
+    expect(familyRenderPromptV1.system.toLowerCase()).not.toContain("destination");
+    // v2 names all three roles and the direction between them.
+    expect(system).toContain("the reader of your message is the one being asked");
+    expect(system).toContain("fromdisplayname is the person the reader would be visiting");
+    expect(system).toContain("never the person or");
+    expect(system).toContain("destination");
+    // Including permission to drop the companion rather than misplace them.
+    expect(system).toContain("leave it");
   });
 });
 

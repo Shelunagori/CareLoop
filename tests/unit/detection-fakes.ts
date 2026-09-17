@@ -9,7 +9,7 @@ import type { SignalRecord } from "@/server/repositories/signals";
 import type { ObservationRecord } from "@/server/repositories/observations";
 import type { ProfileRecord } from "@/server/repositories/profiles";
 import type { ReconnectDeps } from "@/server/services/reconnect";
-import { buildFamilyRenderMessages } from "@/server/prompts/family-render.v1";
+import { buildFamilyRenderMessagesV2 } from "@/server/prompts/family-render.v2";
 import { OPEN_OPPORTUNITY_STATUSES, type OpportunityStatus } from "@/core/consent/status";
 import type { Clock } from "@/server/adapters/clock";
 
@@ -82,7 +82,7 @@ export function fakeFamilyRender(options: FakeRenderOptions = {}): FakeFamilyRen
     async render(request) {
       // The COMPLETE runtime input, built by the production function. The
       // privacy snapshot asserts over these exact bytes.
-      const messages = buildFamilyRenderMessages(request.payload);
+      const messages = buildFamilyRenderMessagesV2(request.payload);
       provider.calls.push({
         promptRef: request.promptRef,
         messages,

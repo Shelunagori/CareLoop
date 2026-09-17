@@ -1,5 +1,7 @@
 import "server-only";
 import { systemClock } from "@/server/adapters/clock";
+import { demoFixtureRepo } from "@/server/repositories/demo-fixture";
+import type { DemoFixtureDeps } from "@/server/services/demo-fixture";
 import { createOpenAiEmbeddings } from "@/server/adapters/openai/embeddings";
 import { createOpenAiExtraction } from "@/server/adapters/openai/extraction";
 import { createOpenAiLlm } from "@/server/adapters/openai/llm";
@@ -161,6 +163,26 @@ export function createBaselineDebugDeps(): BaselineDebugDeps {
  * Development-only seeding deps (app/api/dev/seed-events). Same repositories
  * as production; only the caller is gated.
  */
+/**
+ * The development-only demo fixture. Constructed nowhere but the demo routes,
+ * so the delete surface it carries cannot be reached from the product.
+ */
+export function createDemoFixtureDeps(): DemoFixtureDeps {
+  const db = createServiceRoleClient();
+  return {
+    clock: systemClock,
+    entities: entitiesRepo(db),
+    relationships: relationshipsRepo(db),
+    episodes: episodesRepo(db),
+    facts: factsRepo(db),
+    interactionEvents: interactionEventsRepo(db),
+    baselines: baselinesRepo(db),
+    conversations: conversationsRepo(db),
+    messages: messagesRepo(db),
+    demo: demoFixtureRepo(db),
+  };
+}
+
 export function createM3SeedDeps() {
   const db = createServiceRoleClient();
   return {

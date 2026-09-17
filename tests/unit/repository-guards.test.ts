@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 /**
@@ -148,7 +148,103 @@ describe("4. a closure is surfaced once", () => {
 
 });
 
-describe("5. no repository detaches a client method", () => {
+describe("5. every demo read and delete is scoped to the fixture", () => {
+  const repo = read("server/repositories/demo-fixture.ts");
+
+  it("no delete can reach beyond the caller's own rows", () => {
+    // The entire safety argument for a development reset is this predicate.
+    // Without it a mistyped id is someone else's history.
+    for (const method of ["deleteEpisodesByIds", "deleteEntities", "deleteUserFacts"] as const) {
+      expect(methodBody(repo, method), method).toContain('.eq("user_id", userId)');
+    }
+  });
+
+  it("entity and episode deletion is bounded by an explicit id list", () => {
+    expect(methodBody(repo, "deleteEntities")).toContain('.in("id", [...entityIds])');
+    // By the episode's OWN id. An episode is never deleted for what it
+    // happens to mention.
+    expect(methodBody(repo, "deleteEpisodesByIds")).toContain('.in("id", [...ids])');
+    expect(methodBody(repo, "deleteEpisodesByIds")).not.toContain("episode_entities");
+  });
+
+  it("the fixture writes with caller-chosen ids, which is how it proves ownership", () => {
+    // A deterministic id is the ownership marker. If these inserts ever stop
+    // carrying one, ownership silently falls back to guessing by name.
+    expect(methodBody(repo, "createEntityWithId")).toContain("id: input.id");
+    expect(methodBody(repo, "createEpisodeWithId")).toContain("id: input.id");
+    expect(methodBody(repo, "findEntityIds")).toContain('.in("id", [...ids])');
+  });
+
+  it("demo counts start from the fixture's entity ids, never from user_id alone", () => {
+    const body = methodBody(repo, "countsForFixture");
+    // Every count reachable from an entity is filtered by the fixture's ids.
+    const occurrences = body.split('.in("entity_id", ids)').length - 1;
+    expect(occurrences).toBeGreaterThanOrEqual(4);
+    // And the decision graph is reached by FOREIGN KEY, not by user.
+    expect(body).toContain('.in("opportunity_id", opportunityIds)');
+    expect(body).toContain('.in("request_id", requestIds)');
+    // A count that filtered only by user would have produced the live bug.
+    expect(body).not.toMatch(/from\("consent_grants"\)[\s\S]{0,200}?eq\("user_id"/);
+    expect(body).not.toMatch(/from\("closures"\)[\s\S]{0,200}?eq\("user_id"/);
+  });
+
+  it("the fixture's last event is its own, positive, and the most recent", () => {
+    const body = methodBody(repo, "latestEventAt");
+    expect(body).toContain('.eq("entity_id", entityId)');
+    expect(body).toContain('.eq("event_type", eventType as never)');
+    // An absence assertion is evidence of NOT seeing someone; it can never be
+    // the answer to "when did they last visit?".
+    expect(body).toContain('.eq("polarity", "positive")');
+    expect(body).toContain('.order("occurred_at", { ascending: false })');
+    expect(body).toContain(".limit(1)");
+  });
+
+  it("the profile delete names one row, by primary key", () => {
+    // `profiles` is keyed by `id`, not `user_id`, so the usual scope guard
+    // would not catch a widened predicate here. A delete that matched more
+    // than one row would remove other people's profiles outright.
+    const body = methodBody(repo, "deleteProfile");
+    expect(body).toContain('.eq("id", userId)');
+    expect(body).not.toMatch(/\.neq\(|\.gt\(|\.in\(/);
+  });
+
+  it("the profile is put back field by field, nulls included", () => {
+    const body = methodBody(repo, "writeProfile");
+    // Both columns are always written, so restoring a field to empty is a
+    // restore rather than a skipped no-op. And no other column is touched.
+    expect(body).toContain("display_name: displayName");
+    expect(body).toContain("family_display_name: familyDisplayName");
+    expect(body).not.toContain("created_at");
+  });
+
+  it("fact deletion touches only facts about the user, and only named keys", () => {
+    const body = methodBody(repo, "deleteUserFacts");
+    // A fact ABOUT an entity goes with the entity; this method must not
+    // widen into one.
+    expect(body).toContain('.is("subject_entity_id", null)');
+    expect(body).toContain('.in("key", [...keys])');
+  });
+
+  it("an empty id list deletes nothing at all", () => {
+    for (const method of ["deleteEpisodesByIds", "deleteEntities", "deleteUserFacts"] as const) {
+      // `in("id", [])` is a filter that matches nothing in PostgREST, but
+      // relying on that is relying on a library's edge case. The guard is
+      // explicit and comes first.
+      expect(methodBody(repo, method), method).toMatch(/length === 0\) return 0;/);
+    }
+  });
+
+  it("the demo repository is the only file in the codebase that deletes", () => {
+    // DELETE exists nowhere else: the product never removes a person's
+    // history, and a development convenience must not widen that surface.
+    const offenders = readdirSync("server/repositories")
+      .filter((file) => file.endsWith(".ts") && file !== "demo-fixture.ts")
+      .filter((file) => /\.delete\(\)/.test(read(`server/repositories/${file}`)));
+    expect(offenders).toEqual([]);
+  });
+});
+
+describe("6. no repository detaches a client method", () => {
   it("the M5 repositories call through the client", () => {
     for (const file of [
       "server/repositories/consent-grants.ts",

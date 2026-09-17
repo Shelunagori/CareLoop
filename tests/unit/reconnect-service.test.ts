@@ -1585,6 +1585,58 @@ describe("6. drafting: guard, fallback and hashing", () => {
     );
   });
 
+  it("uses the template when the renderer inverts the visit relation", async () => {
+    // END TO END on the live failure. The renderer points the visit at the
+    // companion; the guard rejects; the fallback is what gets hashed, stored
+    // and later shown to the older adult for approval. There is no repair
+    // prompt and no second sample.
+    const store = baseStore();
+    const render = fakeFamilyRender({
+      text: "Dad would like to know if you can visit Simba?",
+    });
+    const deps = fakeReconnectDeps({ store, clock: fixedClock(NOW), familyRender: render });
+    const id = await materializedOpportunity(deps);
+
+    const result = await draftOpportunity(deps, { userId: USER, opportunityId: id });
+
+    expect(result.guardFailures).toContain("inverted_visit_target");
+    expect(result.fallbackUsed).toBe(true);
+
+    const stored = store.opportunities[0];
+    expect(stored.renderedText).toBe("Dad was wondering — are you and Simba able to visit soon?");
+    // The message that would have asked the son to go and see the dog never
+    // reaches storage, so it can never reach the offer either.
+    expect(stored.renderedText).not.toContain("visit Simba");
+    expect(stored.renderedTextHash).toBe(sha256Hex(stored.renderedText!));
+    expect(render.calls).toHaveLength(1);
+  });
+
+  it("accepts a render that puts the companion alongside the reader", async () => {
+    const text = "Dad was wondering — could you and Simba come and visit him this weekend?";
+    const store = baseStore();
+    const render = fakeFamilyRender({ text });
+    const deps = fakeReconnectDeps({ store, clock: fixedClock(NOW), familyRender: render });
+    const id = await materializedOpportunity(deps);
+
+    const result = await draftOpportunity(deps, { userId: USER, opportunityId: id });
+    expect(result.guardFailures).toEqual([]);
+    expect(result.fallbackUsed).toBe(false);
+    expect(store.opportunities[0].renderedText).toBe(text);
+  });
+
+  it("accepts a render that leaves the companion out", async () => {
+    const text = "Dad was wondering whether you might come round and visit him soon?";
+    const store = baseStore();
+    const render = fakeFamilyRender({ text });
+    const deps = fakeReconnectDeps({ store, clock: fixedClock(NOW), familyRender: render });
+    const id = await materializedOpportunity(deps);
+
+    expect((await draftOpportunity(deps, { userId: USER, opportunityId: id })).fallbackUsed).toBe(
+      false,
+    );
+    expect(store.opportunities[0].renderedText).toBe(text);
+  });
+
   it("accepts a safe render unchanged and stores its exact bytes", async () => {
     const text = "Dad was wondering whether you and Simba might come round soon. Any chance?";
     const store = baseStore();
@@ -1732,6 +1784,6 @@ describe("8. the family renderer receives the payload and nothing else", () => {
       "fromDisplayName: Dad\naboutEntityName: Simba\ntopic: visit\nquestion: ask_if_visiting",
     );
     expect(render.calls[0].messages).toHaveLength(2);
-    expect(render.calls[0].promptRef).toBe("family-render.v1");
+    expect(render.calls[0].promptRef).toBe("family-render.v2");
   });
 });

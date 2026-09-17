@@ -14,7 +14,7 @@ import type { ObservationsRepo } from "@/server/repositories/observations";
 import type { ProfilesRepo } from "@/server/repositories/profiles";
 import type { RelationshipRecord, RelationshipsRepo } from "@/server/repositories/relationships";
 import type { SignalRecord, SignalsRepo } from "@/server/repositories/signals";
-import { familyRenderPromptV1 } from "@/server/prompts/family-render.v1";
+import { familyRenderPromptV2 } from "@/server/prompts/family-render.v2";
 import { baselineConfig } from "@/core/baseline/config";
 import { DAY_MS } from "@/core/baseline/day";
 import { detectAssertedAbsence } from "@/core/detection/absence";
@@ -1014,7 +1014,11 @@ export async function runDetectionSweep(
 /** The fallback, re-guarded. Sanitized labels make this total in practice. */
 function guardedFallback(payload: SharePayload): string {
   const template = buildFallbackText(payload);
-  if (checkOutboundText(template, { question: payload.question }).accepted) return template;
+  const verdict = checkOutboundText(template, {
+    question: payload.question,
+    aboutEntityName: payload.aboutEntityName,
+  });
+  if (verdict.accepted) return template;
   return lastResortText(payload.question);
 }
 
@@ -1080,7 +1084,7 @@ export async function draftOpportunity(
   try {
     rendererCalled = true;
     const rendered = await deps.familyRender.render({
-      promptRef: familyRenderPromptV1.ref,
+      promptRef: familyRenderPromptV2.ref,
       payload,
     });
     candidate = rendered.text;
@@ -1092,7 +1096,15 @@ export async function draftOpportunity(
     });
   }
 
-  const verdict = candidate === null ? null : checkOutboundText(candidate, { question: payload.question });
+  const verdict =
+    candidate === null
+      ? null
+      : checkOutboundText(candidate, {
+          question: payload.question,
+          // The companion, so the guard can check the visit RELATION rather
+          // than merely the vocabulary.
+          aboutEntityName: payload.aboutEntityName,
+        });
   const guardFailures = verdict && !verdict.accepted ? verdict.failures.map((f) => f.code) : [];
   const accepted = verdict !== null && verdict.accepted;
   const text = accepted ? verdict.text : guardedFallback(payload);
@@ -1100,7 +1112,7 @@ export async function draftOpportunity(
   logEvent({
     event: "reconnect.guard",
     opportunityId: opportunity.id,
-    promptRef: familyRenderPromptV1.ref,
+    promptRef: familyRenderPromptV2.ref,
     rendererCalled,
     guardOutcome: accepted ? "accepted" : candidate === null ? "render_unavailable" : "rejected",
     guardFailures,
@@ -1145,7 +1157,7 @@ export async function draftOpportunity(
     event: "reconnect.drafted",
     opportunityId: opportunity.id,
     entityId: opportunity.entityId,
-    promptRef: familyRenderPromptV1.ref,
+    promptRef: familyRenderPromptV2.ref,
     fallbackUsed: !accepted,
     // The hash, never the text. The draft is user-derived content.
     renderedTextHash,

@@ -178,3 +178,171 @@ describe("6. the deterministic fallback passes its own guard", () => {
     }
   });
 });
+
+describe("7. the visit relation may not be inverted", () => {
+  /**
+   * The live failure, exactly.
+   *
+   * The record said: the reader may come WITH the companion to visit the
+   * sender. The renderer emitted a message asking the reader to go and see
+   * the companion — pointing the visit at the dog. The record was right; v1 of
+   * the prompt never said who was being visited, so the nearest noun took the
+   * object slot.
+   *
+   * Generic names throughout: this is a rule about word order, not about any
+   * particular fixture.
+   */
+  const VISIT_WITH_COMPANION = {
+    question: "ask_if_visiting",
+    aboutEntityName: "Rex",
+  } as const;
+
+  it("rejects the exact message live acceptance produced", () => {
+    const verdict = checkOutboundText(
+      "Dad would like to know if you can visit Rex?",
+      VISIT_WITH_COMPANION,
+    );
+    expect(verdict.accepted).toBe(false);
+    expect(verdict.accepted === false && verdict.failures.map((f) => f.code)).toContain(
+      "inverted_visit_target",
+    );
+  });
+
+  it("rejects the other ways of pointing the visit at the companion", () => {
+    for (const text of [
+      "Dad would like to know if you can visit Rex?",
+      "Could you go and see Rex soon?",
+      "Would you be able to visit Rex this weekend?",
+      "Dad was wondering — could you come round and see Rex?",
+      "Are you able to call on Rex soon?",
+      "Could you pop over to Rex this week?",
+      "Dad was wondering whether you might drop in on Rex?",
+      "Could you visit with Rex soon?",
+      "Dad asks — can you see your Rex soon?",
+    ]) {
+      const verdict = checkOutboundText(text, VISIT_WITH_COMPANION);
+      expect(verdict.accepted, text).toBe(false);
+      expect(
+        verdict.accepted === false && verdict.failures.map((f) => f.code),
+        text,
+      ).toContain("inverted_visit_target");
+    }
+  });
+
+  it("accepts the companion in the SUBJECT position, where they belong", () => {
+    for (const text of [
+      "Could you and Rex come and visit Dad?",
+      "Are you and Rex able to visit soon?",
+      "Dad was wondering — are you and Rex able to visit soon?",
+      "Dad was wondering whether you and Rex might come round this weekend?",
+      "Could you and Rex pop in on Dad sometime?",
+      // The companion appears AFTER the verb here, but as a separate clause
+      // rather than as its object. The guard reaches across determiners and
+      // prepositions only - widen that filler and this valid message starts
+      // being rejected.
+      "Could you come and visit Dad and bring Rex?",
+      "Dad was wondering — could you visit him and bring Rex along?",
+    ]) {
+      const verdict = checkOutboundText(text, VISIT_WITH_COMPANION);
+      expect(verdict.accepted, text).toBe(true);
+    }
+  });
+
+  it("accepts a message that leaves the companion out entirely", () => {
+    // The prompt tells the renderer to drop them rather than misplace them,
+    // and the guard has to agree or that instruction is unusable.
+    for (const text of [
+      "Could you come and visit Dad?",
+      "Dad was wondering — are you able to visit soon?",
+      "Dad was wondering whether you might come round this weekend?",
+    ]) {
+      expect(checkOutboundText(text, VISIT_WITH_COMPANION).accepted, text).toBe(true);
+    }
+  });
+
+  it("does not run when there is no companion in the record", () => {
+    // Nothing to invert, so nothing to check. A payload without
+    // `aboutEntityName` behaves exactly as it did before this guard existed.
+    expect(
+      checkOutboundText("Dad would like to know if you can visit Rex?", {
+        question: "ask_if_visiting",
+      }).accepted,
+    ).toBe(true);
+  });
+
+  it("is structural, not a name list — it holds for any companion label", () => {
+    for (const name of ["Rex", "Buster", "the dog", "Auntie Pat", "Mr. Tibbs"]) {
+      expect(
+        checkOutboundText(`Dad wondered if you could visit ${name} soon?`, {
+          question: "ask_if_visiting",
+          aboutEntityName: name,
+        }).accepted,
+        name,
+      ).toBe(false);
+      expect(
+        checkOutboundText(`Could you and ${name} come and visit Dad?`, {
+          question: "ask_if_visiting",
+          aboutEntityName: name,
+        }).accepted,
+        name,
+      ).toBe(true);
+    }
+  });
+
+  it("a regex-special companion label cannot break the check", () => {
+    const name = "Rex (the dog)";
+    expect(
+      checkOutboundText(`Dad wondered if you could visit ${name} soon?`, {
+        question: "ask_if_visiting",
+        aboutEntityName: name,
+      }).accepted,
+    ).toBe(false);
+  });
+
+  it("leaves CALL payloads alone — they carry no companion semantics", () => {
+    // `ask_if_calling` has no "come along with" relation in the contract, so
+    // there is nothing for the guard to invert and it must not invent one.
+    for (const text of [
+      "Dad was wondering — could you give them a call soon?",
+      "Dad was wondering — could you and Rex give him a ring?",
+    ]) {
+      expect(
+        checkOutboundText(text, { question: "ask_if_calling", aboutEntityName: "Rex" }).accepted,
+        text,
+      ).toBe(true);
+    }
+  });
+
+  it("the scope is `ask_if_visiting`, and that is a decision, not an oversight", () => {
+    // This text WOULD trip the inversion check under a visit question. Under a
+    // call question it does not, because call semantics are deliberately left
+    // exactly as they were: the contract gives `ask_if_calling` no companion
+    // relation, so this guard has no business forming an opinion about it.
+    const text = "Dad was wondering — could you visit Rex and give Dad a ring?";
+    expect(
+      checkOutboundText(text, { question: "ask_if_visiting", aboutEntityName: "Rex" }).accepted,
+    ).toBe(false);
+    expect(
+      checkOutboundText(text, { question: "ask_if_calling", aboutEntityName: "Rex" }).accepted,
+    ).toBe(true);
+  });
+
+  it("the deterministic fallback passes its own guard, companion and all", () => {
+    // The fallback is where a rejection lands, so it had better not be
+    // rejectable itself.
+    const payload = {
+      fromDisplayName: "Dad",
+      aboutEntityName: "Rex",
+      topic: "visit",
+      question: "ask_if_visiting",
+    } as const;
+    const text = buildFallbackText(payload);
+    expect(text).toBe("Dad was wondering — are you and Rex able to visit soon?");
+    expect(
+      checkOutboundText(text, {
+        question: payload.question,
+        aboutEntityName: payload.aboutEntityName,
+      }).accepted,
+    ).toBe(true);
+  });
+});

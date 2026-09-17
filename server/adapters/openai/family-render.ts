@@ -2,7 +2,7 @@ import "server-only";
 import OpenAI from "openai";
 import { familyRenderModel } from "@/server/config";
 import { serializeSharePayload } from "@/core/share/payload";
-import { buildFamilyRenderMessages } from "@/server/prompts/family-render.v1";
+import { buildFamilyRenderMessagesV2 } from "@/server/prompts/family-render.v2";
 import { errorName, hashText, logProviderCall } from "./log";
 import type {
   FamilyRenderProvider,
@@ -36,7 +36,7 @@ export function createOpenAiFamilyRender(): FamilyRenderProvider {
     async render(request: FamilyRenderRequest): Promise<FamilyRenderResponse> {
       const model = familyRenderModel();
       const startedAt = Date.now();
-      const messages = buildFamilyRenderMessages(request.payload);
+      const messages = buildFamilyRenderMessagesV2(request.payload);
       const base = {
         event: "llm.family_render" as const,
         promptRef: request.promptRef,

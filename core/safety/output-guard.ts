@@ -27,7 +27,8 @@ export type GuardFailure =
   | { code: "question_missing"; question: ClosedReconnectQuestion }
   | { code: "no_question_mark" }
   | { code: "link_or_markup"; match: string }
-  | { code: "numeric_claim"; match: string };
+  | { code: "numeric_claim"; match: string }
+  | { code: "inverted_visit_target"; match: string };
 
 export type GuardVerdict =
   | { accepted: true; text: string }
@@ -47,6 +48,62 @@ const QUESTION_MARKERS: Record<ClosedReconnectQuestion, RegExp> = {
     /\b(call|calls|calling|ring|rings|ringing|phone|phones|speak to|chat to|catch up on the phone)\b/i,
 };
 
+/**
+ * Verbs and phrases whose OBJECT is the party being visited.
+ *
+ * Everything here is a head that takes a destination. `visit`, `see` and
+ * `call on` take it directly; `round to`, `over to` and `in on` are the tails
+ * of "come round to", "get over to", "drop in on" and their relatives, matched
+ * as tails so the many ways of saying the same thing collapse to three.
+ */
+const VISIT_TARGET_HEAD =
+  "(?:visit|visits|visiting|see|sees|seeing|call on|calls on|calling on|round to|over to|in on|round and see|over and see|and see)";
+
+/**
+ * Filler that can sit between the head and its object without changing which
+ * noun is the destination: "visit with Rex", "see your Rex", "visit the Rex".
+ * Deliberately short — a long gap usually means a different noun took the
+ * object slot, and the guard should not reach past it.
+ */
+const VISIT_TARGET_FILLER = "(?:\\s+(?:with|to|and|at|the|a|an|your|his|her|their|our|my|up|by))*";
+
+/** Regex-escape a display label before it is spliced into a pattern. */
+function escapeForRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * The semantic inversion guard.
+ *
+ * The record says: the reader may come WITH `aboutEntityName` to visit
+ * `fromDisplayName`. A renderer that emits "can you visit <aboutEntityName>?"
+ * has swapped the companion for the destination and produced a message that
+ * means the opposite of what the user approved the sending of. Live acceptance
+ * produced exactly that.
+ *
+ * The check is structural rather than lexical: it asks whether the companion's
+ * name occupies the OBJECT SLOT of a visit head, which is a question about
+ * word order and nothing about who the companion is. No name is hard-coded,
+ * and the same rule holds for any payload.
+ *
+ * Narrow on purpose. "Could you and Rex come and visit Dad?" and "Are you and
+ * Rex able to visit soon?" both put the companion before the verb, where a
+ * subject belongs, and both pass untouched.
+ */
+function findInvertedVisitTarget(text: string, aboutEntityName: string): string | null {
+  const name = escapeForRegex(aboutEntityName.trim());
+  if (name.length === 0) return null;
+  // The trailing boundary is a negative lookahead rather than `\b`, because a
+  // label may legitimately end in punctuation - "Rex (the dog)" - and `\b`
+  // after a closing bracket never matches, which would silently switch the
+  // guard off for exactly the labels most likely to confuse a renderer.
+  const pattern = new RegExp(
+    `\\b${VISIT_TARGET_HEAD}${VISIT_TARGET_FILLER}\\s+${name}(?!\\w)`,
+    "i",
+  );
+  return pattern.exec(text)?.[0] ?? null;
+}
+
 /** A renderer has no business emitting a link, an address, or markup. */
 const LINK_OR_MARKUP = /(https?:\/\/|www\.|\S+@\S+\.\S+|<[a-z/!]|\]\(|\*\*|__|\{\{)/i;
 
@@ -59,7 +116,14 @@ const NUMERIC_CLAIM = /\b\d+\s*(day|days|week|weeks|month|months|year|years|time
 
 export function checkOutboundText(
   text: string,
-  requirements: { question: ClosedReconnectQuestion },
+  requirements: {
+    question: ClosedReconnectQuestion;
+    /**
+     * The companion from the payload, when there is one. Supplied so the
+     * guard can check the visit RELATION and not merely the vocabulary.
+     */
+    aboutEntityName?: string;
+  },
 ): GuardVerdict {
   const failures: GuardFailure[] = [];
   const trimmed = text.trim();
@@ -90,6 +154,14 @@ export function checkOutboundText(
 
   const numeric = NUMERIC_CLAIM.exec(trimmed);
   if (numeric) failures.push({ code: "numeric_claim", match: numeric[0] });
+
+  // Visit payloads only. `ask_if_calling` carries no companion semantics in
+  // this contract, so there is no relation for it to invert and the check
+  // deliberately does not run.
+  if (requirements.question === "ask_if_visiting" && requirements.aboutEntityName) {
+    const inverted = findInvertedVisitTarget(trimmed, requirements.aboutEntityName);
+    if (inverted !== null) failures.push({ code: "inverted_visit_target", match: inverted });
+  }
 
   if (failures.length > 0) return { accepted: false, failures };
   // The accepted text is the TRIMMED string, and it is what gets hashed and
