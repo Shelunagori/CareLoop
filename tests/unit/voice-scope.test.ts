@@ -110,7 +110,10 @@ describe("no trace of the hands-free experiment ships", () => {
     const voice = readFileSync("app/_components/voice.ts", "utf8");
     const opens = files.filter((file) => readFileSync(file, "utf8").includes("getUserMedia"));
     expect(opens).toEqual(["app/_components/voice.ts"]);
-    expect(voice).toContain("export async function startRecording()");
+    expect(voice).toMatch(/export async function startRecording\(\s*options: RecordingOptions = \{\}/);
+    // The options are a way to be TOLD the recording ended, never a way to
+    // start one: nothing in them reaches getUserMedia.
+    expect(voice).toMatch(/onLimitReached\?: \(\) => void/);
     // Nothing monitors, meters or analyses audio outside a recording.
     for (const forbidden of ["AudioContext", "createAnalyser", "ScriptProcessor", "setInterval"]) {
       expect(voice, forbidden).not.toContain(forbidden);

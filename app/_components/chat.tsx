@@ -233,26 +233,6 @@ export function Chat(props: {
     [conversationId, status, voiceModeOn, readAloud],
   );
 
-  const beginRecording = useCallback(async () => {
-    setError(null);
-    setVoiceNote(null);
-    stopSpeaking();
-    try {
-      recordingRef.current = await startRecording();
-      // From here on this person hears replies. Nothing plays before they
-      // have asked for voice at least once.
-      setVoiceModeOn(true);
-      setVoice("recording");
-    } catch (error) {
-      setVoiceNote(
-        error instanceof MicrophoneError
-          ? microphoneMessage(error.reason)
-          : microphoneMessage("failed"),
-      );
-      setVoice("off");
-    }
-  }, []);
-
   const finishRecording = useCallback(async () => {
     const recording = recordingRef.current;
     if (!recording) return;
@@ -281,6 +261,36 @@ export function Chat(props: {
       setVoice("off");
     }
   }, []);
+
+  const beginRecording = useCallback(async () => {
+    setError(null);
+    setVoiceNote(null);
+    stopSpeaking();
+    try {
+      recordingRef.current = await startRecording({
+        // The recorder has a ceiling, and a ceiling that fires while the
+        // screen still says "Listening…" is the interface lying about a
+        // microphone. The handle has already released it by the time this
+        // runs; all that is left is to finish the turn the way the person
+        // would have - transcribe, show the words, and wait for Send.
+        onLimitReached: () => {
+          setVoiceNote("That's as long as I can record at once — here's what I heard.");
+          void finishRecording();
+        },
+      });
+      // From here on this person hears replies. Nothing plays before they
+      // have asked for voice at least once.
+      setVoiceModeOn(true);
+      setVoice("recording");
+    } catch (error) {
+      setVoiceNote(
+        error instanceof MicrophoneError
+          ? microphoneMessage(error.reason)
+          : microphoneMessage("failed"),
+      );
+      setVoice("off");
+    }
+  }, [finishRecording]);
 
   const busy = status === "sending";
   const greeting = props.displayName ? `Hello, ${props.displayName}` : null;

@@ -46,18 +46,49 @@ export class MicrophoneError extends Error {
 }
 
 export type Recording = {
+  /**
+   * Resolves with the audio captured so far and guarantees the microphone is
+   * off. Safe to call more than once, and safe to call after the recording has
+   * already ended itself - it resolves with the same audio rather than hanging
+   * or throwing.
+   */
   stop(): Promise<Blob>;
+  /** Ends the recording and throws the audio away. Also idempotent. */
   cancel(): void;
+};
+
+export type RecordingOptions = {
+  /**
+   * Called at most once, and only when the duration ceiling - not the person -
+   * ended the recording. The handle has already released the microphone by
+   * then; this exists so the interface can stop claiming to be listening.
+   */
+  onLimitReached?: () => void;
 };
 
 /**
  * Starts recording and resolves with a handle that stops it.
  *
- * The track is stopped on every exit path, including cancellation and error -
- * a microphone left live after a failed turn is the kind of thing people
- * rightly never forgive.
+ * THE MICROPHONE IS RELEASED ON EVERY TERMINAL PATH. That is the invariant,
+ * and the reason this function has the shape it does.
+ *
+ * It used to release inside `stop()`, which was true for the paths a person
+ * takes and false for the one they do not: the duration ceiling stopped the
+ * MediaRecorder directly, and the tracks stayed live until the person next
+ * touched the page - at the end of a sixty-second recording, precisely when
+ * they have put the phone down. Stopping a recorder and releasing a stream are
+ * two different things, and any design where a caller must remember to do the
+ * second will eventually have a path that forgets.
+ *
+ * So there is exactly ONE ending here. `finalize` releases the tracks, clears
+ * the timer and hands the audio to whoever is waiting; it is guarded by a flag
+ * so it runs once no matter how many endings arrive. Every route in - the
+ * person's stop, their cancel, the ceiling, the recorder's own `onstop` -
+ * leads to it and nowhere else.
  */
-export async function startRecording(): Promise<Recording> {
+const ONSTOP_GRACE_MS = 1000;
+
+export async function startRecording(options: RecordingOptions = {}): Promise<Recording> {
   if (!isRecordingSupported()) throw new MicrophoneError("unsupported");
 
   const mimeType = pickRecordingType();
@@ -78,42 +109,102 @@ export async function startRecording(): Promise<Recording> {
   }
 
   const chunks: Blob[] = [];
-  const recorder = new MediaRecorder(stream, { mimeType });
+  let recorder: MediaRecorder;
+  try {
+    recorder = new MediaRecorder(stream, { mimeType });
+  } catch (error) {
+    // The stream is already open at this point. Nothing below will run to
+    // release it, so this path releases it itself.
+    for (const track of stream.getTracks()) track.stop();
+    throw error instanceof MicrophoneError ? error : new MicrophoneError("failed");
+  }
   recorder.ondataavailable = (event) => {
     if (event.data.size > 0) chunks.push(event.data);
   };
 
-  const release = () => {
+  /** Set the moment any ending begins, so the ceiling cannot fire into one. */
+  let ending = false;
+  /** Set when the one ending has completed. Everything after it is a no-op. */
+  let ended = false;
+  /** Set once the recorder has been asked to stop and its onstop is pending. */
+  let stopRequested = false;
+  let settle: ReturnType<typeof setTimeout> | undefined;
+  let audio: Blob | null = null;
+  const waiting: Array<(blob: Blob) => void> = [];
+
+  /** The only place tracks are stopped, and the only place the timer is cleared. */
+  const finalize = () => {
+    if (ended) return;
+    ended = true;
+    clearTimeout(timeout);
+    if (settle !== undefined) clearTimeout(settle);
     for (const track of stream.getTracks()) track.stop();
+    audio = new Blob(chunks, { type: recorder.mimeType || mimeType });
+    // Every waiter, not just the most recent one: two callers must not leave
+    // one promise pending forever.
+    while (waiting.length > 0) waiting.shift()!(audio);
+  };
+
+  // Assigned ONCE, here, rather than inside stop(). Whatever stops the
+  // recorder - a person, the ceiling, the browser tearing the track down -
+  // arrives at the same ending.
+  recorder.onstop = finalize;
+
+  /**
+   * Asks the recorder to stop, once, and makes sure an ending follows.
+   *
+   * The subtlety is that `onstop` arrives on a LATER task, and the recorder
+   * delivers its audio just before it. Finalizing the moment the recorder
+   * reads `inactive` would therefore build the Blob from chunks that have not
+   * arrived yet and hand back an empty recording - which downstream becomes
+   * "that recording didn't work" at the end of a perfectly good sentence. So
+   * once a stop is in flight, the ending waits for it.
+   */
+  const endNow = () => {
+    ending = true;
+    if (recorder.state === "recording") {
+      stopRequested = true;
+      // Armed BEFORE the stop, not after: a browser that fires onstop
+      // synchronously would otherwise finalize first and leave this timer
+      // behind, still holding a reference to a recording that is over.
+      settle = setTimeout(finalize, ONSTOP_GRACE_MS);
+      recorder.stop();
+      return;
+    }
+    // Inactive with a stop already in flight: onstop is coming, and it carries
+    // the audio. Anything else means nothing is coming at all, so finish now
+    // rather than leave a caller waiting on a promise nobody will resolve.
+    if (!stopRequested) finalize();
   };
 
   // The client's own ceiling, for the person's sake. The server enforces its
   // own from the bytes, and does not trust this.
   const timeout = setTimeout(() => {
-    if (recorder.state === "recording") recorder.stop();
+    // `ending` is set synchronously by stop()/cancel(), so a ceiling that
+    // lands in the same tick as a person's press does nothing.
+    if (ending || ended) return;
+    endNow();
+    // After the release, never before: by the time anyone hears about this,
+    // the microphone is already off.
+    options.onLimitReached?.();
   }, VOICE_LIMITS.maxRecordingSeconds * 1000);
 
   recorder.start();
 
   return {
     stop() {
-      clearTimeout(timeout);
       return new Promise<Blob>((resolve) => {
-        recorder.onstop = () => {
-          release();
-          resolve(new Blob(chunks, { type: recorder.mimeType || mimeType }));
-        };
-        if (recorder.state === "recording") recorder.stop();
-        else {
-          release();
-          resolve(new Blob(chunks, { type: mimeType }));
+        if (ended) {
+          resolve(audio ?? new Blob(chunks, { type: mimeType }));
+          return;
         }
+        waiting.push(resolve);
+        endNow();
       });
     },
     cancel() {
-      clearTimeout(timeout);
-      if (recorder.state === "recording") recorder.stop();
-      release();
+      if (ended) return;
+      endNow();
     },
   };
 }

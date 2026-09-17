@@ -110,13 +110,13 @@ delivered" — unfinished transport, which a retry fixes. Consuming after
 delivery would instead leave "delivered but consent still live", and the retry
 for that window messages a real person a second time.
 
-### Voice is an input and an output, not a second CareLoop
+### Voice is an input and an output, not a second brain
 
 The microphone sits in the composer, and one press is the whole interaction
 model. After that press the pipeline is the one that already existed:
 
 ```
-press the microphone  →  record  →  release
+press the microphone  →  record  →  release the microphone
    ↳ /api/voice/transcribe (language pinned)
      → the transcript lands IN THE COMPOSER, where it can be read and edited
      → the person presses Send
@@ -128,12 +128,29 @@ mishearing that sends itself is irreversible in a product whose whole purpose
 is messaging somebody's family. Everything after the transcript is the typed
 path, unchanged: there is no second chat endpoint, no voice consent path and
 no model in the client — which is why a spoken "yes" reaches the same
-deterministic parser a typed one does.
+deterministic consent parser a typed one does.
 
-**The microphone opens on a press and closes on a press.** Nothing listens in
-the background, nothing is buffered between recordings, and `getUserMedia`
-appears in exactly one module, reached from exactly one button. A guard test
-asserts that, because it is a privacy claim and privacy claims decay quietly.
+**The microphone opens on a press and closes on every ending.** Nothing listens
+in the background, nothing is buffered between recordings, and `getUserMedia`
+appears in exactly one module, reached from exactly one button. Releasing it is
+deliberately not left to the caller: the recording handle has a single ending
+that stops the tracks, clears its timers and answers everyone waiting, and the
+person's stop, their cancel, the duration ceiling and the browser's own
+`onstop` all lead there. A review found the one path that did not — the ceiling
+stopped the recorder while the tracks stayed live — which is why the ending is
+now one function rather than a rule each call site has to remember. Raw audio
+is never stored: it exists for one request and is replaced by a transcript.
+
+**Speech output is authorized, not supplied.** The browser does not send a
+sentence to be spoken — it sends a **reference** to something the server
+already produced and showed (an assistant message, the offer on the table, a
+closure). The server resolves it, proves it belongs to the caller and derives
+the words from storage, so "CareLoop only speaks what CareLoop said" is a
+property of the endpoint rather than a convention the client is trusted to
+follow. Reading replies aloud needs `ELEVENLABS_API_KEY` and
+`ELEVENLABS_VOICE_ID`; without them the provider is constructed as one that
+declines, so the application boots, typed chat and transcription are untouched,
+and only `/api/voice/speak` answers `503`.
 
 **A hands-free wake word was built and removed.** M9 added "Nora", local wake
 detection and a persistent listening session; live acceptance proved the
@@ -153,30 +170,6 @@ load-bearing: a turn path that cannot read the pending offer ends every turn by
 saying there is none, and the card it just drew disappears while the
 opportunity stays open. The turn's dependencies require that read model, so
 omitting it is a compile error rather than a vanishing card.
-
-### Voice is I/O, not a second brain
-
-```
-microphone → speech-to-text → the SAME chat pipeline → assistant text → speech
-```
-
-A spoken "yes" is transcribed, shown to the person, and sent through the
-ordinary chat endpoint into the same deterministic consent parser a typed one
-meets. There is no voice conversation engine, no voice consent path and no
-second model. Raw audio is never stored: it exists for one request and is
-replaced by a transcript.
-
-Speech output is authorized the same way. The browser does not send a sentence
-to be spoken — it sends a **reference** to something the server already
-produced and showed (an assistant message, the offer on the table, a closure).
-The server resolves it, proves it belongs to the caller and derives the words
-from storage, so "CareLoop only speaks what CareLoop said" is a property of the
-endpoint rather than a convention the client is trusted to follow.
-
-Reading replies aloud needs `ELEVENLABS_API_KEY` and `ELEVENLABS_VOICE_ID`.
-Without them the provider is constructed as one that declines: the application
-boots, typed chat and transcription are untouched, and only `/api/voice/speak`
-answers `503`.
 
 ## Setup
 
@@ -207,7 +200,7 @@ they are transaction boundaries, not decisions.
 ## Checks
 
 ```bash
-npm run test        # 991 tests: pure core, services, real Postgres, and UI
+npm run test        # pure core, services, real Postgres, and UI
 npm run test:ui     # the interface tests alone (jsdom)
 npm run lint        # includes the core/ purity boundary
 npm run typecheck
