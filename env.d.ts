@@ -18,5 +18,10 @@ declare namespace NodeJS {
     ELEVENLABS_MODEL_ID?: string;
     // M8, speech to text. Optional; the adapter pins a default.
     OPENAI_TRANSCRIPTION_MODEL?: string;
+    // The language transcription expects. A demo/product-locale setting for
+    // this English POC; it belongs on the profile eventually. Defaults to
+    // "en" - automatic detection guesses badly on one-word utterances, and a
+    // spoken "yes" once came back as a Chinese character.
+    OPENAI_TRANSCRIPTION_LANGUAGE?: string;
   }
 }

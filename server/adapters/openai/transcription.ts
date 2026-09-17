@@ -1,6 +1,6 @@
 import "server-only";
 import OpenAI from "openai";
-import { transcriptionModel } from "@/server/config";
+import { transcriptionLanguage, transcriptionModel } from "@/server/config";
 import { errorName, logProviderCall } from "./log";
 import type { SpeechToTextProvider, TranscribeResponse } from "./types";
 
@@ -24,13 +24,19 @@ export function createOpenAiTranscription(): SpeechToTextProvider {
   return {
     async transcribe({ audio, mimeType }): Promise<TranscribeResponse> {
       const model = transcriptionModel();
+      // PINNED, never detected. A one-word clip gives automatic detection
+      // almost nothing to go on, and live acceptance produced a "yes"
+      // transcribed as a Chinese character - which then travelled correctly
+      // through a pipeline that was right about everything except the
+      // premise. See server/config.ts for why this is configuration.
+      const language = transcriptionLanguage();
       const startedAt = Date.now();
 
       try {
         const file = await OpenAI.toFile(Buffer.from(audio), `speech.${extensionFor(mimeType)}`, {
           type: mimeType,
         });
-        const response = await client.audio.transcriptions.create({ file, model });
+        const response = await client.audio.transcriptions.create({ file, model, language });
         // The provider's words, trimmed. Never corrected towards a name
         // CareLoop happens to know - see core/voice/limits.ts.
         const text = (response.text ?? "").trim();
@@ -39,6 +45,7 @@ export function createOpenAiTranscription(): SpeechToTextProvider {
           event: "voice.transcribe",
           outcome: "ok",
           model,
+          language,
           latencyMs: Date.now() - startedAt,
           // Length only. The transcript is the person's own speech and has no
           // business in a log line.

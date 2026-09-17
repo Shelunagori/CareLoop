@@ -63,6 +63,20 @@ body {
   border-radius: 0.5rem;
 }
 
+/*
+ * ...with one exception: the composer's textarea has no box of its own, so
+ * the shell around it shows the focus instead. Without this the person gets
+ * two accent rectangles, one inside the other.
+ *
+ * It has to live here rather than as an `outline-none` utility on the
+ * element. Tailwind's utilities are in @layer utilities; the rule above is
+ * unlayered, and an unlayered rule beats any layered one regardless of
+ * specificity. A utility would look right in the markup and do nothing.
+ */
+[data-composer] textarea:focus-visible {
+  outline: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

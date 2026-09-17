@@ -411,3 +411,119 @@ describe("6. spoken input lands in the pipeline that already existed", () => {
     expect(provider.calls[0]).toBe(block);
   });
 });
+
+/**
+ * Hands-free consent is the same consent (M9).
+ *
+ * The one thing hands-free must not change. A transcript produced without
+ * anybody pressing anything still reaches the same deterministic parser a
+ * typed answer does — so the interesting assertions here are about the
+ * ABSENCE of a second path, and about ambiguity staying ambiguous when nobody
+ * is holding a mouse.
+ */
+/**
+ * A spoken answer is the typed answer (M8, kept).
+ *
+ * Dictation types a word into the composer and stops. The person still presses
+ * Send, and what they send goes to the same deterministic parser a typed
+ * answer does - which is why there is no voice consent path to audit.
+ */
+describe("7. a dictated answer is read by the same parser", () => {
+  it("a dictated 'yes' is read by the production parser, unchanged", async () => {
+    const { readConsent } = await import("@/core/consent/decision");
+    const heard = await transcribeTurn({ speechToText: sttProvider("yes") }, {
+      audio: bytes(4096),
+      mimeType: "audio/webm",
+    });
+    if (heard.outcome !== "transcribed") throw new Error("expected a transcript");
+
+    expect(heard.text).toBe("yes");
+    expect(readConsent(heard.text).decision).toBe(readConsent("yes").decision);
+    expect(readConsent(heard.text).decision).toBe("approve");
+  });
+
+  it("dictation does not make an ambiguous answer decisive", async () => {
+    const { readConsent } = await import("@/core/consent/decision");
+    for (const utterance of ["maybe", "yes, but maybe later", "not sure", "hmm", "later"]) {
+      const heard = await transcribeTurn({ speechToText: sttProvider(utterance) }, {
+        audio: bytes(4096),
+        mimeType: "audio/webm",
+      });
+      const text = heard.outcome === "transcribed" ? heard.text : "";
+      expect(readConsent(text).decision, utterance).not.toBe("approve");
+    }
+  });
+
+  it("the client voice layer has no way to approve anything", () => {
+    // It can put a word in a textarea. It cannot create a grant, resolve an
+    // opportunity, or reach the family loop at all.
+    for (const file of ["app/_components/voice.ts", "app/_components/speech.ts"]) {
+      const source = code(file);
+      for (const forbidden of [
+        "consent",
+        "approve",
+        "creategrant",
+        "opportunit",
+        "family",
+        "renderedtext",
+      ]) {
+        expect(source.toLowerCase(), `${file}: ${forbidden}`).not.toContain(forbidden);
+      }
+    }
+  });
+});
+
+describe("8. transcription is told what language to expect", () => {
+  it("defaults to English for this POC", async () => {
+    const { transcriptionLanguage } = await import("@/server/config");
+    const saved = process.env.OPENAI_TRANSCRIPTION_LANGUAGE;
+    delete process.env.OPENAI_TRANSCRIPTION_LANGUAGE;
+    try {
+      expect(transcriptionLanguage()).toBe("en");
+    } finally {
+      if (saved === undefined) delete process.env.OPENAI_TRANSCRIPTION_LANGUAGE;
+      else process.env.OPENAI_TRANSCRIPTION_LANGUAGE = saved;
+    }
+  });
+
+  it("is configuration, not a constant", async () => {
+    const { transcriptionLanguage } = await import("@/server/config");
+    const saved = process.env.OPENAI_TRANSCRIPTION_LANGUAGE;
+    process.env.OPENAI_TRANSCRIPTION_LANGUAGE = "nl";
+    try {
+      // The seam where "the deployment's language" becomes "this person's".
+      expect(transcriptionLanguage()).toBe("nl");
+      process.env.OPENAI_TRANSCRIPTION_LANGUAGE = "  ";
+      expect(transcriptionLanguage()).toBe("en");
+    } finally {
+      if (saved === undefined) delete process.env.OPENAI_TRANSCRIPTION_LANGUAGE;
+      else process.env.OPENAI_TRANSCRIPTION_LANGUAGE = saved;
+    }
+  });
+
+  it("the adapter sends it to the provider", () => {
+    // Asserted structurally rather than by naming a language: the point is
+    // that SOMETHING is pinned, and that it is the configured value.
+    const source = code("server/adapters/openai/transcription.ts");
+    expect(source).toContain("const language = transcriptionLanguage();");
+    expect(source).toContain(
+      "client.audio.transcriptions.create({ file, model, language })",
+    );
+    // And no prompt-side coercion anywhere near it.
+    for (const forbidden of ["prompt:", "Respond in", "in English"]) {
+      expect(source, forbidden).not.toContain(forbidden);
+    }
+  });
+
+  it("the language reaches the log, so a wrong one is diagnosable", () => {
+    const source = code("server/adapters/openai/transcription.ts");
+    const records = [...source.matchAll(/logProviderCall\(\{([\s\S]*?)\}\);/g)].map((m) => m[1]);
+    expect(records.some((record) => record.includes("language"))).toBe(true);
+    // Still no transcript, and still no audio.
+    for (const record of records) {
+      for (const forbidden of ["audio", "text:", "transcript:"]) {
+        expect(record, forbidden).not.toContain(forbidden);
+      }
+    }
+  });
+});

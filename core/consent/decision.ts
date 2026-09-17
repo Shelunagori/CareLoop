@@ -9,6 +9,17 @@
  * contains a negation; refusal is checked before agreement because "don't send
  * it" contains "send it". Checking agreement first would turn a refusal into a
  * send, which is the single worst bug this product can have.
+ *
+ * AND A YES IS THE WHOLE SENTENCE, NOT ITS FIRST WORD. "yes but later"
+ * approved, because the affirmative opener is anchored at the start while the
+ * deferral vocabulary was either anchored too ("later") or required an exact
+ * bigram ("maybe later"). A message that OPENED affirmative and then took it
+ * back matched only the opener. Dictation made that unacceptable rather than
+ * merely wrong: a transcript is punctuated by a speech-to-text model, not by
+ * the person, so "yes but later" and "yes, but maybe later" are one sentence
+ * arriving with different commas, and one of them used to send a message to
+ * somebody's family. Qualifiers are therefore unanchored and disqualifying,
+ * and punctuation is removed before anything is matched.
  */
 export type ConsentDecision = "approve" | "decline" | "unclear";
 
@@ -62,12 +73,44 @@ const APPROVE: readonly Rule[] = [
 ];
 
 /**
- * Lowercase and collapse whitespace. Apostrophes are KEPT - stripping them
- * would merge "don't" into "dont" only by accident of the patterns above, and
- * both spellings are handled explicitly instead.
+ * Qualifiers that disqualify an affirmative, wherever they appear.
+ *
+ * Unanchored ON PURPOSE - that is the whole fix. These are not new meanings;
+ * every one of them already makes a message ambiguous or a refusal when it
+ * stands alone. What changes is that they now also count when they arrive
+ * AFTER a "yes", which is how people actually hedge: "yes, but not this week".
+ *
+ * Deliberately not here: "but", "however", "although". A message can turn on
+ * one of those without deferring anything ("yes, but keep it short"), and a
+ * parser that treated contrast as hesitation would start refusing consent
+ * people had actually given.
+ *
+ * Also deliberately not here: outright refusal words. "don't send it" already
+ * contains "send it", so it matches an affirmative rule; if refusal were also
+ * a qualifier it would come out UNCLEAR, and a plain "no, don't send it" would
+ * stop being a decline. Refusal stays one step further down, where it has
+ * always been, and wins.
+ */
+const QUALIFIER: readonly Rule[] = [
+  { name: "later", pattern: /\b(later|another time|some other time|in a (bit|while))\b/ },
+  { name: "maybe", pattern: /\b(maybe|perhaps|possibly)\b/ },
+  { name: "not_now", pattern: /\bnot (now|today|yet|this time|this week)\b/ },
+  { name: "not_sure", pattern: /\b(not sure|unsure|no idea)\b/ },
+];
+
+/**
+ * Lowercase, drop sentence punctuation, collapse whitespace.
+ *
+ * The punctuation goes because a transcriber put it there. Apostrophes are
+ * KEPT - stripping them would merge "don't" into "dont" only by accident of
+ * the patterns above, and both spellings are handled explicitly instead.
  */
 export function normalizeReply(raw: string): string {
-  return raw.toLowerCase().replace(/\s+/g, " ").trim();
+  return raw
+    .toLowerCase()
+    .replace(/[.,;:!?\u2026\u2013\u2014"\u201c\u201d()]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function firstMatch(rules: readonly Rule[], text: string): string | null {
@@ -84,10 +127,20 @@ export function readConsent(raw: string): ConsentReading {
   const ambiguous = firstMatch(AMBIGUOUS, text);
   if (ambiguous) return { decision: "unclear", matchedRule: ambiguous };
 
+  const approve = firstMatch(APPROVE, text);
+
+  // A yes that takes itself back decides nothing. Checked BEFORE refusal so a
+  // contradiction ("yes, not now") asks once more rather than terminating the
+  // opportunity on a sentence that said both things - and only when an
+  // affirmative is actually present, so a bare "not now" is still a decline.
+  if (approve) {
+    const qualifier = firstMatch(QUALIFIER, text);
+    if (qualifier) return { decision: "unclear", matchedRule: `qualified_${qualifier}` };
+  }
+
   const decline = firstMatch(DECLINE, text);
   if (decline) return { decision: "decline", matchedRule: decline };
 
-  const approve = firstMatch(APPROVE, text);
   if (approve) return { decision: "approve", matchedRule: approve };
 
   // Not an answer to the question. The caller carries on talking.

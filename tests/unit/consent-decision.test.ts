@@ -156,3 +156,178 @@ describe("6. changing the subject is not an answer at all", () => {
     expect(readConsent("").matchedRule).toBeNull();
   });
 });
+
+/**
+ * A "yes" with a qualifier attached is not a yes (P1).
+ *
+ * Found while building hands-free, and a release blocker because of it: a
+ * transcript is punctuated by a speech-to-text model, not by the person, so
+ * "yes but later" and "yes, but maybe later" are the same sentence arriving
+ * with different commas. One of them used to approve an irreversible message
+ * to a family member and the other did not.
+ *
+ * The rule the tests below pin is simple and worth stating plainly: an
+ * affirmative opener grants nothing if the same sentence goes on to defer,
+ * hedge or refuse. Consent is what the whole message says, not what its first
+ * word says.
+ */
+describe("a qualified yes is not consent", () => {
+  const QUALIFIED = [
+    "yes but later",
+    "yes, but later",
+    "yes but maybe later",
+    "yes, but maybe later",
+    "yes maybe later",
+    "yeah but later",
+    "yes not now",
+    "yes, not now",
+    "yes but not yet",
+    "yes, but not yet",
+  ];
+
+  it.each(QUALIFIED)("%j never approves", (reply) => {
+    expect(readConsent(reply).decision, reply).not.toBe("approve");
+  });
+
+  it.each(QUALIFIED)("%j names the rule that disqualified it", (reply) => {
+    // Never a silent unclear: the log has to say which qualifier was heard.
+    expect(readConsent(reply).matchedRule, reply).not.toBeNull();
+  });
+
+  it("punctuation cannot change the decision", () => {
+    // The property, stated directly: commas are the transcriber's, not the
+    // person's, so a decision may not depend on one.
+    const variants = (base: string) => [
+      base,
+      base.replace(" but ", ", but "),
+      base.replace(" but ", " but, "),
+      `${base}.`,
+      `${base}!`,
+      base.replace(/ /g, ", ").replace(/, $/, ""),
+    ];
+    for (const base of ["yes but later", "yes but maybe later", "yes but not yet"]) {
+      const readings = variants(base).map((text) => readConsent(text).decision);
+      expect(new Set(readings).size, `${base} -> ${readings.join("/")}`).toBe(1);
+      expect(readings[0], base).not.toBe("approve");
+    }
+  });
+
+  it("a clear yes is still a clear yes", () => {
+    for (const reply of ["yes", "yes please", "yeah", "please send it", "send it"]) {
+      expect(readConsent(reply).decision, reply).toBe("approve");
+    }
+    // And punctuation does not disturb those either.
+    for (const reply of ["yes.", "yes!", "yes, please.", "send it."]) {
+      expect(readConsent(reply).decision, reply).toBe("approve");
+    }
+  });
+
+  it("a clear no is still a clear no", () => {
+    for (const reply of ["no", "not now", "don't send it", "no thanks", "not yet"]) {
+      expect(readConsent(reply).decision, reply).toBe("decline");
+    }
+    for (const reply of ["no.", "no!", "not now.", "don't send it."]) {
+      expect(readConsent(reply).decision, reply).toBe("decline");
+    }
+  });
+
+  it("a refusal that contains the words of an approval is still a refusal", () => {
+    // The ordering this parser has always had: "don't send it" contains
+    // "send it", and must never read as one.
+    expect(readConsent("don't send it")).toMatchObject({ decision: "decline" });
+    expect(readConsent("please don't send it")).toMatchObject({ decision: "decline" });
+  });
+});
+
+/**
+ * The property, over the whole vocabulary.
+ *
+ * Not "these four strings agree" but "punctuation is never load-bearing":
+ * for every reply the parser has an opinion about, every punctuated variant
+ * of it must produce the IDENTICAL reading — decision and rule. A transcript's
+ * commas belong to the speech-to-text model, and nothing irreversible may turn
+ * on them.
+ */
+describe("punctuation is never load-bearing", () => {
+  const CORPUS = [
+    // approvals
+    "yes",
+    "yes please",
+    "yeah",
+    "ok",
+    "go ahead",
+    "send it",
+    "please send it",
+    "that's fine",
+    "sounds good",
+    // declines
+    "no",
+    "no thanks",
+    "not now",
+    "not yet",
+    "don't send it",
+    "rather not",
+    "never mind",
+    // hesitation
+    "maybe",
+    "maybe later",
+    "not sure",
+    "i guess",
+    "let me think",
+    "up to you",
+    // qualified affirmatives — the bug this file exists for
+    "yes but later",
+    "yes but maybe later",
+    "yes but not yet",
+    "yeah but not this week",
+    "yes not now",
+    "sure but maybe another time",
+    // not an answer at all
+    "the garden needs doing",
+  ];
+
+  /** Every way a transcriber might punctuate the same sentence. */
+  const punctuated = (reply: string): string[] => {
+    const words = reply.split(" ");
+    const commaAfterEachWord = words.map((_, index) =>
+      words.map((word, at) => (at === index && at < words.length - 1 ? `${word},` : word)).join(" "),
+    );
+    return [
+      reply,
+      `${reply}.`,
+      `${reply}!`,
+      `${reply}?`,
+      `${reply}…`,
+      `"${reply}"`,
+      `${reply.charAt(0).toUpperCase()}${reply.slice(1)}.`,
+      reply.split(" ").join(", "),
+      ...commaAfterEachWord,
+    ];
+  };
+
+  it.each(CORPUS)("every punctuation of %j reads the same", (reply) => {
+    const baseline = readConsent(reply);
+    for (const variant of punctuated(reply)) {
+      expect(readConsent(variant), `${reply} -> ${variant}`).toEqual(baseline);
+    }
+  });
+
+  it("and no punctuation of a qualified yes ever approves", () => {
+    for (const reply of ["yes but later", "yes but maybe later", "yes but not yet", "yes not now"]) {
+      for (const variant of punctuated(reply)) {
+        expect(readConsent(variant).decision, variant).not.toBe("approve");
+      }
+    }
+  });
+
+  it("the comma was never the point — the qualifier is", () => {
+    // Both halves of the original report, now identical, and neither one
+    // approving. The bug was that the deferral vocabulary only counted at the
+    // start of a message.
+    expect(readConsent("yes but later").decision).toBe("unclear");
+    expect(readConsent("yes, but maybe later").decision).toBe("unclear");
+    expect(readConsent("yes but later").decision).toBe(
+      readConsent("yes, but later").decision,
+    );
+  });
+});

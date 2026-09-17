@@ -24,8 +24,12 @@ export type SpeakSource =
 export type SpeakRequest = { conversationId: string; source: SpeakSource };
 let current: HTMLAudioElement | null = null;
 let currentUrl: string | null = null;
+/** Fires the current request's completion callback, whatever ended it. */
+let endCurrent: (() => void) | null = null;
 
 export function stopSpeaking(): void {
+  const finish = endCurrent;
+  endCurrent = null;
   if (current) {
     current.pause();
     current.src = "";
@@ -35,6 +39,7 @@ export function stopSpeaking(): void {
     URL.revokeObjectURL(currentUrl);
     currentUrl = null;
   }
+  finish?.();
 }
 
 export type SpeakFailure = "unavailable" | "failed" | "blocked";
@@ -46,7 +51,20 @@ export class SpeakError extends Error {
   }
 }
 
-export async function speak(request: SpeakRequest): Promise<void> {
+export type SpeakOptions = {
+  /**
+   * Called when playback actually ENDS, not when it begins.
+   *
+   * `audio.play()` resolves as soon as the sound starts, which is the wrong
+   * moment for the "Stop reading" control: it should exist for as long as
+   * there is something to stop, not for as long as it takes to start. It
+   * fires exactly once, including when playback is stopped early or never
+   * starts.
+   */
+  onEnded?: () => void;
+};
+
+export async function speak(request: SpeakRequest, options: SpeakOptions = {}): Promise<void> {
   // Never two at once.
   stopSpeaking();
 
@@ -64,6 +82,14 @@ export async function speak(request: SpeakRequest): Promise<void> {
   const audio = new Audio(url);
   current = audio;
   currentUrl = url;
+
+  let ended = false;
+  const finish = () => {
+    if (ended) return;
+    ended = true;
+    options.onEnded?.();
+  };
+  endCurrent = finish;
 
   audio.onended = () => stopSpeaking();
 

@@ -230,8 +230,8 @@ voice, and the architecture does not change:
 
 | | |
 |---|---|
-| Press **Speak**, say the line, press **Stop** | the transcript appears **in the composer** |
-| Read it, then press **Send** | it goes down the ordinary `/api/chat` endpoint |
+| Press the **microphone** in the composer, say the line, press **Stop** | the transcript appears **in the composer** |
+| Read it, correct it if it misheard, then press **Send** | it goes down the ordinary `/api/chat` endpoint |
 | CareLoop replies | it is read aloud, if voice output is configured |
 
 > *"The transcript is shown before it is sent, on purpose. A microphone can
@@ -259,6 +259,34 @@ POST /api/voice/speak  { conversationId, source: { type, id } }
 If `ELEVENLABS_API_KEY` and `ELEVENLABS_VOICE_ID` are absent, speaking to
 CareLoop still works; only reading aloud is unavailable, and the speaker
 control says so rather than failing.
+
+## D3. Why there is no wake word
+
+If the question comes up — and with an older-adult product it does — the
+answer is a decision, not a gap.
+
+M9 built it: a wake phrase, local wake detection running as WebAssembly in the
+page, voice-activity detection, and a listening session that stayed open for a
+whole conversation with nothing to press. It worked in tests. Live acceptance
+is where it died: the detector fired inconsistently, the session recorded
+clips too short or too noisy to transcribe, and a demo that depends on a coin
+flip is not a demo.
+
+> *"So it was deleted — not hidden behind a flag. Dormant code that still
+> passes its tests is how a codebase ends up with things nobody can explain a
+> year later. Push-to-talk is the shipped interaction because it is the one
+> that works every time in front of a person."*
+
+> *"What the experiment was worth is what it found. Four bugs it surfaced are
+> in the product and have tests: a consent parser that read 'yes but later' as
+> a yes, an unpinned transcription language that returned a Chinese character
+> for a spoken 'yes', empty transcripts being submitted as messages, and an
+> unusable recording being reported to the person as a mishearing."*
+
+**Honest limitation.** A browser page is not an always-on appliance either
+way: browsers throttle background tabs and suspend sleeping devices. Voice
+input here is a press, and the architecture — a `SpeechToTextProvider` port —
+is what a native or hardware client would keep.
 
 ## E. What the demo does *not* claim
 

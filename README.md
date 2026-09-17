@@ -28,8 +28,7 @@ anything structural.
 | M5 | Exact-text consent and the family loop | Complete |
 | M6 | Deterministic demo fixture (George / John / Simba) | Complete |
 | M7 | Demo UX, accessibility and product polish | Complete |
-| M8 | Push-to-talk voice | Pending review |
-x
+| M8 | Push-to-talk voice | Live-accepted |
 
 ## What it does
 
@@ -110,6 +109,40 @@ Consuming first means the surviving crash window is "authorized but not yet
 delivered" — unfinished transport, which a retry fixes. Consuming after
 delivery would instead leave "delivered but consent still live", and the retry
 for that window messages a real person a second time.
+
+### Voice is an input and an output, not a second CareLoop
+
+The microphone sits in the composer, and one press is the whole interaction
+model. After that press the pipeline is the one that already existed:
+
+```
+press the microphone  →  record  →  release
+   ↳ /api/voice/transcribe (language pinned)
+     → the transcript lands IN THE COMPOSER, where it can be read and edited
+     → the person presses Send
+     → /api/chat → turn events → /api/voice/speak
+```
+
+The transcript is never auto-submitted. Speech-to-text mishears names, and a
+mishearing that sends itself is irreversible in a product whose whole purpose
+is messaging somebody's family. Everything after the transcript is the typed
+path, unchanged: there is no second chat endpoint, no voice consent path and
+no model in the client — which is why a spoken "yes" reaches the same
+deterministic parser a typed one does.
+
+**The microphone opens on a press and closes on a press.** Nothing listens in
+the background, nothing is buffered between recordings, and `getUserMedia`
+appears in exactly one module, reached from exactly one button. A guard test
+asserts that, because it is a privacy claim and privacy claims decay quietly.
+
+**A hands-free wake word was built and removed.** M9 added "Nora", local wake
+detection and a persistent listening session; live acceptance proved the
+detection too unreliable to put in front of a person, and the session listening
+too unpredictable to reason about. It was deleted rather than left behind a
+flag — dormant code that still passes its tests is the kind nobody can explain
+a year later. Four general correctness fixes it surfaced were kept: the consent
+qualifier rule, the pinned transcription language, empty-transcript safety, and
+the distinction between "I didn't catch that" and "that recording failed".
 
 ### The card is the server's word, not the model's
 

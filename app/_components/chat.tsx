@@ -6,6 +6,7 @@ import {
   isRecordingSupported,
   microphoneMessage,
   MicrophoneError,
+  NothingHeardError,
   startRecording,
   transcribe,
   type Recording,
@@ -105,15 +106,17 @@ export function Chat(props: {
 
   const readAloud = useCallback(async (request: SpeakRequest) => {
     setSpeaking(true);
+    const done = () => setSpeaking(false);
     try {
-      await speak(request);
+      // Resolves when playback BEGINS; `onEnded` is the moment it stops, which
+      // is when the Stop control retires and listening may resume.
+      await speak(request, { onEnded: done });
     } catch (error) {
       // Never fatal: the words are already on screen.
       setVoiceNote(
         error instanceof SpeakError ? speakMessage(error.reason) : "I couldn't play that aloud.",
       );
-    } finally {
-      setSpeaking(false);
+      done();
     }
   }, []);
 
@@ -264,8 +267,16 @@ export function Chat(props: {
       // itself into an irreversible action is the failure this prevents.
       setInput(text);
       composerRef.current?.focus();
-    } catch {
-      setVoiceNote("I couldn't understand that recording. Please try again.");
+    } catch (error) {
+      // Two different apologies, because they are two different situations.
+      // "I didn't catch that" tells the person to speak again; it must not be
+      // said when the recording itself was the problem, or we blame their
+      // voice for our bug. Either way nothing is sent and nothing is lost.
+      setVoiceNote(
+        error instanceof NothingHeardError
+          ? "I didn't catch that. Could you try again?"
+          : "Sorry, that recording didn't work. Please try again.",
+      );
     } finally {
       setVoice("off");
     }
@@ -367,7 +378,27 @@ export function Chat(props: {
         <label htmlFor="chat-input" className="sr-only">
           Write a message to CareLoop
         </label>
-        <div className="flex items-end gap-2.5">
+        {/*
+          ONE shell, not three controls that happen to sit on the same line.
+          The border, the background and the focus ring belong to this div;
+          the textarea inside it is transparent and borderless. That is the
+          whole trick, and it is why the microphone reads as part of the
+          composer rather than as a second thing to decide about.
+        */}
+        <div
+          data-composer
+          // The textarea has no box of its own, so the SHELL shows its focus -
+          // the same 3px accent outline every other focusable thing in
+          // CareLoop gets, around the whole composer. An OUTLINE, not a
+          // border, so it never competes with the recording border below.
+          // Scoped to the textarea, so the buttons inside keep their own ring
+          // instead of lighting up the entire composer when tabbed to.
+          className={`flex items-end gap-1.5 rounded-2xl border-2 bg-[var(--color-surface)] p-1.5 transition-colors has-[textarea:focus-visible]:outline-[3px] has-[textarea:focus-visible]:outline-offset-2 has-[textarea:focus-visible]:outline-[var(--color-accent)] ${
+            voice === "recording"
+              ? "border-[var(--color-accent)]"
+              : "border-[var(--color-line)]"
+          }`}
+        >
           <textarea
             id="chat-input"
             ref={composerRef}
@@ -381,61 +412,77 @@ export function Chat(props: {
             }}
             rows={1}
             disabled={busy}
-            placeholder="Write a message…"
-            className="min-h-[3.5rem] flex-1 resize-none rounded-xl border-2 border-[var(--color-line)] bg-[var(--color-surface)] px-4 py-3 text-[1rem] leading-normal outline-none disabled:opacity-60"
+            // Short on purpose. The controls occupy the right end of the
+            // composer, and at 375px a longer placeholder wraps to a second
+            // line and is clipped. The full wording lives in the label.
+            placeholder="Message…"
+            // max-h caps the growth so a long message scrolls inside the
+            // composer instead of eating the conversation above it.
+            className="max-h-40 min-h-[2.75rem] flex-1 resize-none bg-transparent px-2.5 py-2.5 text-[1rem] leading-normal disabled:opacity-60"
           />
+          <button
+            type="button"
+            onClick={() =>
+              voice === "recording" ? void finishRecording() : void beginRecording()
+            }
+            disabled={busy || voice === "transcribing"}
+            aria-label={voice === "recording" ? "Stop recording" : "Start voice input"}
+            aria-pressed={voice === "recording"}
+            aria-busy={voice === "transcribing" || undefined}
+            // 2.75rem is 47px at the 17px root: past the 44px target, and the
+            // same size in all three states so the row never twitches.
+            className={`inline-flex h-[2.75rem] w-[2.75rem] shrink-0 items-center justify-center rounded-xl transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+              voice === "recording"
+                ? "bg-[var(--color-accent)] text-white"
+                : "text-[var(--color-muted)] hover:bg-[var(--color-surface-muted)]"
+            }`}
+          >
+            {voice === "recording" ? (
+              <StopIcon />
+            ) : voice === "transcribing" ? (
+              <SpinnerIcon />
+            ) : (
+              <MicIcon />
+            )}
+          </button>
           <Button
             type="submit"
             disabled={busy || input.trim().length === 0}
             pending={busy && consentPending === null}
             pendingLabel="Sending…"
+            // The word, not an icon. This product is read by people who should
+            // not have to know what a paper aeroplane means.
+            className="shrink-0 rounded-xl"
           >
             Send
           </Button>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5 pt-2.5">
-          {voice === "recording" ? (
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => void finishRecording()}
-              aria-label="Stop recording"
-            >
-              <MicIcon /> Stop
-            </Button>
-          ) : (
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => void beginRecording()}
-              disabled={busy || voice === "transcribing"}
-              pending={voice === "transcribing"}
-              pendingLabel="Transcribing…"
-              aria-label="Speak your message"
-            >
-              <MicIcon /> Speak
-            </Button>
-          )}
+        {(voice !== "off" || speaking) && (
+          <div className="flex flex-wrap items-center gap-2.5 pt-2.5">
+            {/* In words, never colour alone. */}
+            {voice === "recording" && (
+              <span className="text-[0.95rem] text-[var(--color-muted)]">Listening…</span>
+            )}
+            {voice === "transcribing" && (
+              <span className="text-[0.95rem] text-[var(--color-muted)]">Transcribing…</span>
+            )}
 
-          {voice === "recording" && (
-            <span className="text-[0.95rem] text-[var(--color-muted)]">Listening…</span>
-          )}
-
-          {speaking && (
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => {
-                stopSpeaking();
-                setSpeaking(false);
-              }}
-              aria-label="Stop reading aloud"
-            >
-              Stop reading
-            </Button>
-          )}
-        </div>
+            {speaking && (
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => {
+                  stopSpeaking();
+                  setSpeaking(false);
+                }}
+                aria-label="Stop reading aloud"
+              >
+                Stop reading
+              </Button>
+            )}
+          </div>
+        )}
       </form>
     </div>
   );
@@ -499,13 +546,44 @@ function ClosureUpdate({ sentence }: { sentence: string }) {
   );
 }
 
-/** Decorative: every control that uses it also carries a text label. */
+/** Decorative: the control that uses it carries an accessible label. */
+function StopIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      className="h-[1.1rem] w-[1.1rem]"
+      fill="currentColor"
+    >
+      <rect x="7" y="7" width="10" height="10" rx="2" />
+    </svg>
+  );
+}
+
+/** Decorative: the control that uses it carries an accessible label. */
+/** Same box as the microphone, so the composer does not move while it thinks. */
+function SpinnerIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      className="h-[1.3rem] w-[1.3rem] motion-safe:animate-spin"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+    >
+      <path d="M12 3a9 9 0 1 0 9 9" />
+    </svg>
+  );
+}
+
 function MicIcon() {
   return (
     <svg
       aria-hidden="true"
       viewBox="0 0 24 24"
-      className="mr-2 h-[1.15rem] w-[1.15rem]"
+      className="h-[1.3rem] w-[1.3rem]"
       fill="none"
       stroke="currentColor"
       strokeWidth="2"

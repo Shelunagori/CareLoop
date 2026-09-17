@@ -51,6 +51,25 @@ export function transcriptionModel(): string {
 }
 
 /**
+ * The language transcription is told to expect (M9 reliability).
+ *
+ * PINNED, not detected. Automatic detection is a guess made from the audio,
+ * and the shortest utterances - "yes", "no", "okay", "thanks" - are exactly
+ * the ones it has least to go on. Live acceptance produced a one-word clip
+ * transcribed as a Chinese character, which then travelled correctly through
+ * the ordinary pipeline and got a correct answer in Chinese: every layer did
+ * its job on a premise that was wrong two steps earlier.
+ *
+ * This is a DEMO/PRODUCT-LOCALE setting for an English POC. It belongs on the
+ * profile or the session eventually - the person's language, not the
+ * deployment's - and the environment variable is the seam where that change
+ * will happen.
+ */
+export function transcriptionLanguage(): string {
+  return process.env.OPENAI_TRANSCRIPTION_LANGUAGE?.trim() || "en";
+}
+
+/**
  * Whether text-to-speech is configured at all.
  *
  * Voice output is optional: CareLoop must remain fully usable - typed AND

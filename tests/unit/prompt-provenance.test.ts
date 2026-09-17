@@ -22,12 +22,19 @@ import { assembleContext, EMPTY_MEMORY } from "@/server/services/context";
 const hash = (file: string) =>
   createHash("sha256").update(readFileSync(file)).digest("hex");
 
-/** The bytes pushed at HEAD 27972d6, where M0-M7 were locked. */
+/**
+ * The pushed bytes. v1 and v2 were sealed when M0-M7 locked; v3 was sealed
+ * when M8 locked. Nothing in the voice work since has touched any of them:
+ * how a sentence arrived is not something the companion needs to be told,
+ * and a prompt edit for it would be a behaviour change nobody asked for.
+ */
 const SEALED = {
   "server/prompts/conversation.v1.ts":
     "e57e8fef3e456cab761f821ef032a68a3802d3ffbf314e80c596ea3562b61dcb",
   "server/prompts/conversation.v2.ts":
     "2db98998c9b29dadd55360503dbed5e05b91ae25c34d4b6ca75583494c10c7f4",
+  "server/prompts/conversation.v3.ts":
+    "f0b73d3c12796134af63c42320f47befbf3f4c654f1227b49ce20abb5368a22e",
 } as const;
 
 /** Everything M8 acceptance added. None of it may appear in a sealed version. */
@@ -54,6 +61,18 @@ describe("1. the sealed versions are sealed", () => {
     for (const rule of M8_RULES) {
       expect(conversationPromptV1.system, `v1: ${rule}`).not.toContain(rule);
       expect(conversationPromptV2.system, `v2: ${rule}`).not.toContain(rule);
+    }
+  });
+
+  it("no version has learned how the words arrived", () => {
+    // Voice is transport. The companion is not told that a microphone was
+    // used, what the voice is called, or that a sentence was dictated rather
+    // than typed - none of which would change what a good answer is. This
+    // outlived a whole hands-free experiment being built and then removed.
+    for (const prompt of [conversationPromptV1, conversationPromptV2, conversationPromptV3]) {
+      for (const leak of ["Nora", "wake", "hands-free", "hands free", "microphone"]) {
+        expect(prompt.system, `${prompt.ref}: ${leak}`).not.toContain(leak);
+      }
     }
   });
 

@@ -139,13 +139,37 @@ export function microphoneMessage(reason: MicrophoneFailure): string {
  * microphone can mishear a name, and a mishearing that goes straight into an
  * irreversible action is exactly the failure this ordering prevents.
  */
+export class NothingHeardError extends Error {
+  readonly name = "NothingHeardError";
+  constructor() {
+    super("no_speech");
+  }
+}
+
 export async function transcribe(audio: Blob): Promise<string> {
   const form = new FormData();
   form.append("audio", audio, "speech");
   const response = await fetch("/api/voice/transcribe", { method: "POST", body: form });
+
+  // 422, and ONLY 422, is "nothing heard".
+  //
+  // The route returns it for exactly one outcome - `no_speech`, which is a
+  // transcription that succeeded and came back empty. That is somebody
+  // coughing, and the conversation should carry on.
+  //
+  // 413 and 415 are NOT that. They are the recording being too large, or in a
+  // container the server will not accept: the capture went wrong, and calling
+  // it "I didn't catch that" would tell the person their speech was unclear
+  // when the truth is that our recorder produced something unusable. They fall
+  // through to the sanitized failure below, which still submits nothing.
+  if (response.status === 422) throw new NothingHeardError();
   if (!response.ok) throw new Error(`transcribe_failed_${response.status}`);
+
   const body = (await response.json()) as { text?: string };
   const text = body.text?.trim();
-  if (!text) throw new Error("transcribe_empty");
+  // A SUCCESSFUL response carrying nothing is the same thing 422 means, and
+  // the route can only produce one of them at a time. Never submitted, never
+  // an assistant turn.
+  if (!text) throw new NothingHeardError();
   return text;
 }
