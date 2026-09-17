@@ -1,6 +1,7 @@
 import { Chat, type ChatMessage } from "@/app/_components/chat";
 import { DemoResetButton } from "@/app/_components/dev-tools";
 import { DemoHint } from "@/app/_components/dev-hint";
+import { FamilyInboxLink } from "@/app/_components/dev-operator";
 import { resetDemoAction } from "@/app/_actions/demo";
 import { getCurrentUserId } from "@/server/auth/current-user";
 import { isDebugSurfaceEnabled } from "@/server/config";
@@ -51,7 +52,14 @@ export default async function Page() {
       initialMessages={initialMessages}
       initialPendingOffer={view.pendingOffer}
       displayName={view.displayName}
-      devTools={isDev ? <DemoResetButton action={resetDemoAction} /> : null}
+      devTools={
+        isDev ? (
+          <div className="flex items-start gap-2">
+            <FamilyInboxLink />
+            <DemoResetButton action={resetDemoAction} />
+          </div>
+        ) : null
+      }
       demoHint={isDev ? <DemoHint /> : null}
     />
   );

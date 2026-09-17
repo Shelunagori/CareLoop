@@ -43,20 +43,60 @@ export type DevInboxEntry = NotifierDelivery & {
 };
 
 /**
- * In-process inbox for the development notifier.
+ * The development notifier's outbox. PROCESS-GLOBAL, EPHEMERAL, DEV ONLY.
  *
- * Module-level and therefore per-runtime: on a serverless instance it does not
- * survive a cold start, which is fine because it is a local acceptance aid,
- * not a delivery record. The delivery record is the `family_requests` row.
+ * This was a module-level `const devInbox = new Map()`, and that was wrong in
+ * a way nothing caught until the demo was run for real: the delivery said
+ * delivered, the capability URL worked when opened by hand, and the inbox page
+ * said "No family messages yet."
+ *
+ * A module-level binding belongs to a MODULE EVALUATION, not to a process.
+ * Next 16 with Turbopack builds separate server bundles for a route handler
+ * and a server component, so a module reachable from both is instantiated once
+ * per bundle - and again on every hot reload. The delivery path wrote Map A,
+ * the page read Map B, and nothing anywhere reported an error. Every unit test
+ * passed because each one imported the writer and the reader from the same
+ * cached module, which is the one arrangement the bug cannot appear in.
+ *
+ * So the Map hangs off `globalThis` under a registered symbol, and all three
+ * entry points resolve it through `devInbox()`. One Map per Node process,
+ * shared by every module evaluation in it, unaffected by a reload.
+ *
+ * WHAT IT IS NOT. Not a delivery record - that is the `family_requests` row,
+ * and it is what any question about what was sent should be answered from.
+ * Not production architecture: a deployment swaps the Notifier adapter for a
+ * real provider and this file is never constructed. Not durable - it dies with
+ * the dev server, and it is cleared by the demo reset on purpose.
+ *
+ * It holds the plaintext capability URL, which nothing else in this system
+ * durably holds, for one reason: it is the local stand-in for the external
+ * delivery channel, and that URL is exactly what the channel would have
+ * carried. It stays in memory, on the operator's own machine, behind a
+ * development-only loopback-gated page.
  */
-const devInbox = new Map<string, DevInboxEntry>();
+const DEV_INBOX_KEY: unique symbol = Symbol.for("careloop.dev.family-inbox");
+
+type DevInboxHost = { [DEV_INBOX_KEY]?: Map<string, DevInboxEntry> };
+
+/**
+ * The one resolver. Every read, write and clear goes through it, so there is
+ * no path that can reach a Map other than this process's.
+ */
+function devInbox(): Map<string, DevInboxEntry> {
+  const host = globalThis as unknown as DevInboxHost;
+  const existing = host[DEV_INBOX_KEY];
+  if (existing) return existing;
+  const created = new Map<string, DevInboxEntry>();
+  host[DEV_INBOX_KEY] = created;
+  return created;
+}
 
 export function readDevInbox(): DevInboxEntry[] {
-  return [...devInbox.values()].sort((a, b) => b.deliveredAt.localeCompare(a.deliveredAt));
+  return [...devInbox().values()].sort((a, b) => b.deliveredAt.localeCompare(a.deliveredAt));
 }
 
 export function clearDevInbox(): void {
-  devInbox.clear();
+  devInbox().clear();
 }
 
 export class NotifierUnavailableError extends Error {
@@ -93,14 +133,17 @@ export function createDevNotifier(env: NodeJS.ProcessEnv = process.env): Notifie
         reference: `dev-inbox:${message.requestId}`,
         deliveredAt: new Date().toISOString(),
       };
-      devInbox.set(message.requestId, { ...delivery, ...message });
+      devInbox().set(message.requestId, { ...delivery, ...message });
 
-      // Local development only, and the URL is the point of the tool. The
-      // structured log below is what a deployed notifier would emit.
+      // The capability URL is NOT printed. It used to be, because copying it
+      // out of the terminal was the only way to open the family page; the
+      // inbox at /dev/family-inbox replaced that, and a token in scrollback is
+      // a token in a screen share, a screenshot and a shell history file. The
+      // message body is local development only and is the point of the line.
       console.log(
         `\n[careloop dev notifier] to ${message.recipientDisplayName ?? message.address}\n` +
           `${message.body}\n` +
-          `respond: ${message.responseUrl}\n`,
+          `open /dev/family-inbox to reply\n`,
       );
       return delivery;
     },

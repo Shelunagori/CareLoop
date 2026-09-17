@@ -1,5 +1,5 @@
 import "server-only";
-import { readDevInbox, type DevInboxEntry } from "@/server/adapters/notifier";
+import { clearDevInbox, readDevInbox, type DevInboxEntry } from "@/server/adapters/notifier";
 
 /**
  * Development-only read of the dev notifier's inbox.
@@ -14,4 +14,17 @@ export type { DevInboxEntry };
 
 export function readNotifierInbox(): DevInboxEntry[] {
   return readDevInbox();
+}
+
+/**
+ * Empties the development notifier's outbox.
+ *
+ * Part of the DEVELOPMENT reset, and nothing more: the inbox is an in-process
+ * Map, so this deletes no row, no delivery record and no family request. The
+ * reason it has to happen at all is that a capability link from the previous
+ * run would otherwise still be sitting there when the next demo starts -
+ * pointing at an opportunity that has just been reset out of existence.
+ */
+export function clearNotifierInbox(): void {
+  clearDevInbox();
 }

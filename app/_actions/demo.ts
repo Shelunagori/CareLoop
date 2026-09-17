@@ -8,6 +8,7 @@ import {
   resetDemoFixture,
   seedDemoFixture,
 } from "@/server/services/demo-fixture";
+import { clearNotifierInbox } from "@/server/services/dev-tools";
 import { DEMO_GEORGE } from "@/fixtures/demo/george";
 
 /**
@@ -38,5 +39,8 @@ export async function resetDemoAction(): Promise<{ ok: boolean }> {
   await resetDemoFixture(deps, { userId, spec: DEMO_GEORGE });
   await seedDemoFixture(deps, { userId, spec: DEMO_GEORGE });
   await ensureBlankConversation(deps, { userId });
+  // The family side starts clean too. Otherwise the next demo opens with a
+  // reply link for a request the reset has just removed.
+  clearNotifierInbox();
   return { ok: true };
 }

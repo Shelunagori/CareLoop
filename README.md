@@ -226,10 +226,27 @@ exact `x-careloop-dev-secret` header match. Anything else returns a bare 404.
 | `/api/dev/seed-events` | POST | Replay the demo timeline through the production pipeline |
 | `/api/dev/detect` | POST | Run a detection sweep on demand |
 | `/api/dev/family-inbox` | GET | Read the dev notifier's outbox (stands in for SMS/email) |
+| `/dev/family-inbox` | GET | The same outbox as an inbox, so the demo can show both sides of the loop |
 | `/family/respond/[token]` | GET/POST | The family recipient page — bounded reply choices, no account needed |
 
-`/api/dev/family-inbox` is the only surface that returns a plaintext token, so
-a human can click the link during local acceptance. `/debug` never shows one.
+Those two family-inbox surfaces are the only ones that expose a plaintext
+token, so a human can click the link during local acceptance; `/debug` never
+shows one.
+
+That outbox is one `globalThis`-backed Map per dev server process — shared by
+every module evaluation in it, cleared by the demo reset, gone when the server
+stops. It is not a delivery record; the `family_requests` row is.
+
+The two are gated differently, and the difference is worth stating plainly. The
+**API route** is header-authenticated: the caller proves it knows the secret.
+The **page** cannot be — a browser navigating to a URL sends no header, and
+putting the secret in the URL to fix that would be worse than the problem. So
+the page checks that the secret is *configured* and that the request arrived on
+a loopback host (`localhost`, `127.0.0.1`, `[::1]`), which keeps the LAN URL
+`next dev` prints beside the local one from reaching a live family capability
+link. Host is client-supplied and forgeable, so that is a door, not
+authentication; the weight is carried by the two conditions that mean it cannot
+render anywhere it could be deployed. `docs/07-demo.md` has the two-tab demo.
 
 ### Local acceptance
 

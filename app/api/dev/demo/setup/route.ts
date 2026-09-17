@@ -9,6 +9,7 @@ import {
   resetDemoFixture,
   seedDemoFixture,
 } from "@/server/services/demo-fixture";
+import { clearNotifierInbox } from "@/server/services/dev-tools";
 import { DEMO_GEORGE } from "@/fixtures/demo/george";
 
 export const runtime = "nodejs";
@@ -49,6 +50,9 @@ export async function POST(request: Request) {
   const removed = parsed.data.reset
     ? await resetDemoFixture(deps, { userId, spec: DEMO_GEORGE })
     : null;
+  // A reset clears the development notifier's outbox as well, so the family
+  // side of the demo does not open holding last run's reply link.
+  if (parsed.data.reset) clearNotifierInbox();
   const seeded = await seedDemoFixture(deps, { userId, spec: DEMO_GEORGE });
   const state = await readDemoState(deps, { userId, spec: DEMO_GEORGE });
 

@@ -71,19 +71,44 @@ Check it again at any time:
 curl -sS localhost:3000/api/dev/demo/state -H "x-careloop-dev-secret: $S" | jq
 ```
 
-## B. Start the app
+## B. Start the app, in two tabs
 
 ```bash
 npm run dev
 ```
 
+| Tab | What it is | Who it stands for |
+|---|---|---|
+| **A** | `localhost:3000` | George, using CareLoop |
+| **B** | `localhost:3000/dev/family-inbox` | John's phone |
+
+Tab B is a **development-only** page and a demo prop. It shows the development
+notifier's outbox — the same messages that would have gone out as SMS — so both
+ends of the reconnect loop can be seen without a terminal. Outside local
+development it is a 404, and nothing about it reaches a production bundle.
+
+> Open it on **`localhost`**, not on the LAN URL `next dev` prints beside it.
+> The page holds a live family reply link, so it renders only for a loopback
+> host. That is a door against casual reachability from the same network — it
+> is not authentication, and the page says so in its own header comment.
+
+> *"A real deployment swaps one adapter: the Notifier port takes a recipient, a
+> body and a link, and a Twilio or SendGrid implementation satisfies it in a
+> few lines. Nothing in consent, authorization, delivery or response semantics
+> changes — the family member still holds a capability URL, and the response
+> route is the same one either way."*
+
 ---
 
 ## C. The script
 
-> The chat page carries a **Reset demo** button in development. It runs the
-> same reset, seed and blank-conversation steps as the command above, through a
-> server action — the secret never reaches the browser.
+> The chat page carries **Reset demo** and **Open family inbox** controls in
+> development, grouped as operator controls and labelled as such. Reset runs
+> the same reset, seed and blank-conversation steps as the command above
+> through a server action — the secret never reaches the browser — and it also
+> empties the family inbox, so a run never opens holding the previous run's
+> reply link. George has no access to his family's inbox; the person running
+> the demo does.
 
 ### 1. Relational memory
 
@@ -163,11 +188,25 @@ path. Typing `yes` works identically.
 
 ### 6. Delivery
 
+> **Switch to Tab B.**
+
+John's inbox now holds one message, showing **exactly** the sentence George
+approved — the same bytes, not a re-rendering of them. Nothing was generated
+after the approval.
+
+> *"What he is reading is the string that was hashed before George saw it. The
+> opportunity, the consent snapshot, the family request, this inbox and the
+> reply page all carry the same bytes, and a test walks all six in one run."*
+
+The capability URL is **no longer printed to the terminal**. It used to be,
+because copying it out of the log was the only way to reach the family page;
+the inbox replaced that, and a token in scrollback is a token in a screen
+share, a screenshot and a shell history file. The same outbox is still
+available to a terminal, if a reviewer wants to see the raw delivery:
+
 ```bash
 curl -sS localhost:3000/api/dev/family-inbox -H "x-careloop-dev-secret: $S" | jq
 ```
-
-The dev notifier stands in for SMS or email. Copy the `responseUrl`.
 
 > *"Creating that request, spending the consent and consuming the opportunity
 > are one transaction, before the network call. The row is a durable
@@ -176,8 +215,9 @@ The dev notifier stands in for SMS or email. Copy the `responseUrl`.
 
 ### 7. The family page
 
-Open the `responseUrl` — worth doing at a phone width, since that is where it
-would really be read. John sees a message from **Dad**, the exact approved
+Press **Open reply** in the inbox — worth doing at a phone width, since that is
+where it would really be read. The link is the one the notifier recorded; the
+inbox cannot mint a token of its own. John sees a message from **Dad**, the exact approved
 sentence, and one question: *Can you visit?* No transcript, no history, no
 account.
 

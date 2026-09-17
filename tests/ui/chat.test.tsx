@@ -448,7 +448,10 @@ describe("6. development-only controls", () => {
     // The decision is made on the server, in the page, and passed down as a
     // node. The client component has no say and no env check of its own.
     expect(page).toContain("const isDev = isDebugSurfaceEnabled(process.env);");
-    expect(page).toMatch(/devTools=\{isDev \? <DemoResetButton/);
+    expect(page).toMatch(/devTools=\{\s*isDev \?/);
+    expect(page).toContain("<DemoResetButton");
+    // The family-inbox link is gated by the same single decision.
+    expect(page).toContain("<FamilyInboxLink />");
     expect(page).toMatch(/demoHint=\{isDev \? <DemoHint/);
 
     const chat = (await import("node:fs")).readFileSync("app/_components/chat.tsx", "utf8");

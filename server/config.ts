@@ -164,6 +164,54 @@ export function authorizeDevSeed(
 
 
 /**
+ * Is this request coming from the machine the dev server is running on?
+ *
+ * `next dev` prints two URLs: a localhost one and a LAN one. The family inbox
+ * puts a live capability link in an href, so the LAN one being equally able to
+ * open it is a real difference - anyone on the same network could read a
+ * family message and answer it as that family member.
+ *
+ * BE PRECISE ABOUT WHAT THIS IS. The Host header is supplied by the client and
+ * can be forged by anything that can already reach the port, so this is not
+ * authentication and must never be described as any. It removes the casual
+ * path - the LAN URL sitting in a terminal, a phone on the same wifi - and
+ * nothing more. The conditions that carry real weight are the ones beside it:
+ * local development, not a deployment, a configured secret. None of those
+ * exist anywhere this page could be deployed, which is the actual protection.
+ *
+ * An allow-list of the three hosts the demo runs on, not a pattern: `127.0.0.1`
+ * is loopback and so is the whole of `127.0.0.0/8`, but the demo does not use
+ * the rest of it, and a range is a thing to get subtly wrong. `localhost.evil`
+ * and `notlocalhost` fail because the comparison is on the whole host.
+ *
+ * An `x-forwarded-host` of any kind fails closed: its presence means the
+ * request did not arrive directly, so the Host header is whatever the hop in
+ * front decided it should be, unless that hop also says loopback.
+ */
+const LOOPBACK_HOSTS = ["localhost", "127.0.0.1", "[::1]"];
+
+export function isLocalOperatorHost(input: {
+  host: string | null | undefined;
+  forwardedHost?: string | null;
+}): boolean {
+  const loopback = (raw: string | null | undefined): boolean => {
+    const value = raw?.trim().toLowerCase();
+    if (!value) return false;
+    // Strip the port, taking care not to split an IPv6 literal's colons.
+    const host = value.startsWith("[")
+      ? value.slice(0, value.indexOf("]") + 1)
+      : value.split(":")[0]!;
+    return LOOPBACK_HOSTS.includes(host);
+  };
+
+  if (!loopback(input.host)) return false;
+  // Absent is fine - a direct request has no forwarded host. Present means
+  // proxied, and then it has to say loopback too.
+  if (input.forwardedHost != null && !loopback(input.forwardedHost)) return false;
+  return true;
+}
+
+/**
  * M4 detection. Every number here is a BOUND: a sweep runs on an ordinary
  * request, so it must cost a predictable amount no matter how much history an
  * account has accumulated. Nothing full-scans.
