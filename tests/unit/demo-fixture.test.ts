@@ -370,11 +370,29 @@ describe("5. the baseline comes from the real engine", () => {
  * these are exempt, and in exchange a test proves each one is actually gated.
  * Listing them individually keeps the exemption from becoming a directory.
  */
+/**
+ * Files that are ALLOWED to name the demo's cast, because being the demo is
+ * their entire job.
+ *
+ * It used to be development-only surfaces. M10/M11 added the public demo, so
+ * two production files now legitimately name John: the action that binds his
+ * email contact, and the setup screen that asks for it. The list therefore
+ * says "demo-only", and a companion test below requires every entry to gate
+ * itself - so a file cannot buy its way onto this list just by being added to
+ * it.
+ */
+/** Local-development surfaces. Gated by NODE_ENV. */
 const DEV_ONLY_FILES = [
   "app/_actions/demo.ts",
   "app/_components/dev-tools.tsx",
   "app/_components/dev-hint.tsx",
 ];
+
+/** The PUBLIC demo's own files. Gated by CARELOOP_DEMO_MODE. */
+const PUBLIC_DEMO_FILES = ["app/_actions/demo-session.ts", "app/_components/demo-start.tsx"];
+
+/** Everything allowed to name the cast, for whichever reason. */
+const DEMO_ONLY_FILES = [...DEV_ONLY_FILES, ...PUBLIC_DEMO_FILES];
 
 describe("6. the demo names never reach production code", () => {
   const NAMES = ["George", "Simba", "Johnny", "John"];
@@ -416,7 +434,7 @@ describe("6. the demo names never reach production code", () => {
     const offenders: string[] = [];
     for (const file of productionFiles()) {
       if (PROMPT_EXAMPLES.includes(file)) continue;
-      if (DEV_ONLY_FILES.includes(file)) continue;
+      if (DEMO_ONLY_FILES.includes(file)) continue;
       const code = stripComments(readFileSync(file, "utf8"), file);
       for (const name of NAMES) {
         if (new RegExp(`\\b${name}\\b`).test(code)) offenders.push(`${file}: ${name}`);
@@ -510,6 +528,31 @@ describe("7. every demo route is development-only", () => {
     }
   });
 
+  it("every file allowed to name the cast is gated, or is a rendered child of one", () => {
+    // Being on the list is not a licence. Each entry either checks a gate
+    // itself, or is a presentational component whose only caller is gated -
+    // and the gated parent is named here so the pairing is explicit.
+    const GATED_BY_PARENT: Record<string, string> = {
+      "app/_components/dev-tools.tsx": "app/page.tsx",
+      "app/_components/dev-hint.tsx": "app/page.tsx",
+      "app/_components/demo-start.tsx": "app/page.tsx",
+    };
+
+    for (const file of DEMO_ONLY_FILES) {
+      const source = readFileSync(file, "utf8");
+      const gatesItself =
+        source.includes("isDemoModeEnabled") || source.includes("isDebugSurfaceEnabled");
+      if (gatesItself) continue;
+
+      const parent = GATED_BY_PARENT[file];
+      expect(parent, `${file} neither gates itself nor names a gated parent`).toBeTruthy();
+      const parentSource = readFileSync(parent, "utf8");
+      expect(parentSource, `${parent} does not gate ${file}`).toMatch(
+        /isDemoModeEnabled|isDebugSurfaceEnabled/,
+      );
+    }
+  });
+
   it("the demo fixture is only reachable from somewhere that gates itself", () => {
     /**
      * The fixture used to be development-only, and this guard said so. M10
@@ -536,7 +579,7 @@ describe("7. every demo route is development-only", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("the production demo action is the only ungated-by-NODE_ENV importer", () => {
+  it("the production demo action is the only non-development importer", () => {
     // Named explicitly, so a second one cannot appear quietly by satisfying
     // the rule above.
     const importers: string[] = [];
@@ -546,6 +589,8 @@ describe("7. every demo route is development-only", () => {
       if (readFileSync(file, "utf8").includes("fixtures/demo/george")) importers.push(relative);
     }
     expect(importers).toEqual(["app/_actions/demo-session.ts"]);
+    // ...and it gates itself on demo mode, not on NODE_ENV.
+    expect(readFileSync("app/_actions/demo-session.ts", "utf8")).toContain("isDemoModeEnabled");
   });
 
   it("the state endpoint returns no token, draft or secret", () => {

@@ -1,6 +1,7 @@
 import type { Notifier, NotifierMessage } from "@/server/adapters/notifier";
 import type { Db } from "@/server/repositories/db";
 import type { ConsentGrantRecord, ConsentGrantsRepo } from "@/server/repositories/consent-grants";
+import { sha256Hex } from "@/core/share/text-hash";
 import type { FamilyContactRecord, FamilyContactsRepo } from "@/server/repositories/family-contacts";
 import type { FamilyRequestRecord, FamilyRequestsRepo } from "@/server/repositories/family-requests";
 import type { FamilyResponseRecord, FamilyResponsesRepo } from "@/server/repositories/family-responses";
@@ -94,6 +95,13 @@ export function fakeFamilyContacts(store: M5Store): FamilyContactsRepo {
   return {
     async findForEntity(userId, entityId) {
       return store.contacts.find((c) => c.userId === userId && c.entityId === entityId) ?? null;
+    },
+    async findForEntityAndChannel(userId, entityId, channel) {
+      return (
+        store.contacts.find(
+          (c) => c.userId === userId && c.entityId === entityId && c.channel === channel,
+        ) ?? null
+      );
     },
     async findById(id) {
       return store.contacts.find((c) => c.id === id) ?? null;
@@ -434,6 +442,8 @@ export function m5Deps(input: {
   store: M5Store;
   clock: Clock;
   notifier?: Notifier;
+  /** Override to exercise a deployment's addressing rule, or its absence. */
+  resolveContact?: FamilySendDeps["resolveContact"];
 }): {
   consent: ConsentDeps;
   send: FamilySendDeps;
@@ -462,6 +472,21 @@ export function m5Deps(input: {
       familyContacts: fakeFamilyContacts(store),
       entities: base.entities,
       notifier: input.notifier ?? fakeNotifier(store),
+      // The tests exercise the LOCAL addressing rule unless one overrides it,
+      // which is what every existing M5 assertion was written against.
+      resolveContact:
+        input.resolveContact ??
+        (async ({ userId, entityId, entityDisplayName }) =>
+          fakeFamilyContacts(store).ensure({
+            userId,
+            entityId,
+            channel: "dev",
+            // Digested, exactly as the real dev resolver does: an internal id
+            // must not travel to a transport, and a fake that leaked one
+            // would hide that rule rather than test it.
+            address: `dev-inbox:${sha256Hex(`${userId}:${entityId}`).slice(0, 16)}`,
+            displayName: entityDisplayName,
+          })),
     },
     family: { clock, db, familyRequests: requests, familyResponses: responses },
     closure: {

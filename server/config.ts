@@ -318,6 +318,8 @@ export const familyConfig = {
    * same Notifier port without touching anything above it.
    */
   devChannel: "dev",
+  /** The production transport's channel. Named, never inferred. */
+  emailChannel: "email",
   respondPath: "/family/respond",
   /** Closures surfaced to the older adult per turn. One is enough. */
   maxClosuresPerTurn: 1,

@@ -23,5 +23,14 @@ declare namespace NodeJS {
     // "en" - automatic detection guesses badly on one-word utterances, and a
     // spoken "yes" once came back as a Chinese character.
     OPENAI_TRANSCRIPTION_LANGUAGE?: string;
+    // Deployment. Where a family capability link points; required and
+    // validated on a deployment, defaulted to localhost only in development.
+    CARELOOP_PUBLIC_BASE_URL?: string;
+    // Exactly "true" turns a deployment into a public anonymous demo.
+    CARELOOP_DEMO_MODE?: string;
+    // M11, production family delivery by email. Server-only, all three.
+    BREVO_API_KEY?: string;
+    BREVO_SENDER_EMAIL?: string;
+    BREVO_SENDER_NAME?: string;
   }
 }

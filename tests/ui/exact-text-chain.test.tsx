@@ -10,6 +10,7 @@ import { loadFamilyView } from "@/server/services/family-response";
 // is asserted in tests/unit/dev-family-inbox.test.ts.
 import { clearDevInbox, createDevNotifier, readDevInbox } from "@/server/adapters/notifier";
 import { sha256Hex } from "@/core/share/text-hash";
+import { renderFamilyEmail } from "@/core/family/email";
 import { Chat, type PendingOffer } from "@/app/_components/chat";
 import { createStore, resetIds } from "../unit/detection-fakes";
 import { m5Deps, resetM5Ids, withM5, type M5Store } from "../unit/consent-fakes";
@@ -36,7 +37,8 @@ import { m5Deps, resetM5Ids, withM5, type M5Store } from "../unit/consent-fakes"
 const NOW = new Date("2026-09-16T12:00:00.000Z");
 const USER = "user-1";
 const JOHN = "entity-john";
-const TEXT = "Dad was wondering — are you and Simba able to visit soon? ☕ ";
+/** Every character a well-meaning "tidy up" would change, plus HTML's four. */
+const TEXT = 'Dad was wondering — are you & Simba able to "visit" soon? <3 ☕ ';
 const HASH = sha256Hex(TEXT);
 
 function seed(): M5Store {
@@ -143,6 +145,30 @@ describe("one sentence, six surfaces, zero edits", () => {
     const view = await loadFamilyView(d.family, url.slice(url.lastIndexOf("/") + 1));
     if (view.outcome !== "ok") throw new Error(`expected ok, got ${view.outcome}`);
     const familyMessage = view.message;
+
+    // 7. the email the transport would send
+    const email = renderFamilyEmail({
+      body: inboxBody,
+      responseUrl: url,
+      fromDisplayName: "Dad",
+    });
+    // The text part carries the bytes as they are. The HTML part escapes, and
+    // is compared by what a mail client would DISPLAY - escaping is the one
+    // transformation permitted, and only at this boundary.
+    const emailText = email.textContent;
+    const emailDisplayed = email.htmlContent
+      .replace(/<[^>]*>/g, "")
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'");
+
+    expect(emailText, "the email's text part altered the approved bytes").toContain(TEXT);
+    expect(emailDisplayed, "the email's HTML would display altered text").toContain(TEXT);
+    // Escaped in the markup, so the body cannot inject anything.
+    expect(email.htmlContent).toContain("&lt;3");
+    expect(email.htmlContent).not.toContain("<3");
 
     // Identity, not similarity. `toBe` on strings is byte equality.
     for (const [name, value] of [

@@ -102,3 +102,72 @@ export function DemoRestartButton({
     </div>
   );
 }
+
+/**
+ * Where the reviewer's demo message should be sent.
+ *
+ * One field, once, before the conversation starts. It is DEMO CONFIGURATION:
+ * George never sees it, nothing about it enters his conversation, and the only
+ * reason it exists is that a real email transport needs a real inbox. A
+ * plain form posting to a server action, so the address is validated where it
+ * cannot be bypassed.
+ */
+export function DemoContactSetup({
+  action,
+}: {
+  action: (formData: FormData) => Promise<{ ok: boolean; reason?: string }>;
+}) {
+  const [pending, startTransition] = useTransition();
+  const [problem, setProblem] = useState<string | null>(null);
+
+  return (
+    <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col justify-center px-6">
+      <h1 className="text-[1.45rem] font-semibold tracking-tight">CareLoop demo setup</h1>
+      <p className="pt-3 text-[1rem]">Where should John&rsquo;s demo message be sent?</p>
+      <p className="pt-1 text-[0.95rem] text-[var(--color-muted)]">
+        Use an email you can open during the demo. It will stand in for John&rsquo;s inbox.
+      </p>
+
+      <form
+        className="pt-5"
+        action={(formData) =>
+          startTransition(async () => {
+            setProblem(null);
+            const result = await action(formData);
+            if (!result.ok) {
+              setProblem(
+                result.reason === "too_long"
+                  ? "That address is too long."
+                  : "That doesn't look like an email address.",
+              );
+            }
+          })
+        }
+      >
+        <label htmlFor="demo-email" className="sr-only">
+          Email address for John&rsquo;s demo messages
+        </label>
+        <input
+          id="demo-email"
+          name="email"
+          type="email"
+          required
+          autoComplete="email"
+          placeholder="you@example.com"
+          className="min-h-[2.75rem] w-full rounded-xl border-2 border-[var(--color-line)] bg-[var(--color-surface)] px-4 text-[1rem] outline-none"
+        />
+        <div className="pt-4">
+          <Button type="submit" pending={pending} pendingLabel="Saving…">
+            Continue
+          </Button>
+        </div>
+      </form>
+
+      {problem && (
+        <p role="alert" className="pt-3 text-[0.95rem] text-[#8a2f2f]">
+          {problem}
+        </p>
+      )}
+    </main>
+  );
+}

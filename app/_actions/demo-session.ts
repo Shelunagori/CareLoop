@@ -5,7 +5,10 @@ import { getCurrentIdentity } from "@/server/auth/current-user";
 import { createRequestAuthClient } from "@/server/auth/supabase-request";
 import { authorizeDemoReset, authorizeDemoStart } from "@/server/auth/demo-access";
 import { isDemoModeEnabled } from "@/server/config";
-import { createDemoFixtureDeps } from "@/server/services/deps";
+import { createDemoFixtureDeps, createFamilyContactDeps } from "@/server/services/deps";
+import { readDemoEmail } from "@/core/family/demo-email";
+import { familyConfig } from "@/server/config";
+import { fixtureUuid } from "@/server/services/demo-fixture";
 import {
   ensureBlankConversation,
   resetDemoFixture,
@@ -26,6 +29,18 @@ import { DEMO_GEORGE } from "@/fixtures/demo/george";
  * Neither is reachable unless CARELOOP_DEMO_MODE is exactly "true". A
  * deployment that is not a demo does not have a demo.
  */
+
+/**
+ * The fixture's John, for one user.
+ *
+ * DERIVED, never looked up by display name. A name is a label people reuse -
+ * an earlier version of this codebase claimed a row because it was called
+ * "John" and then deleted it on reset. The contact must bind to exactly the
+ * entity this user's fixture created.
+ */
+function johnEntityId(userId: string): string {
+  return fixtureUuid(DEMO_GEORGE.id, userId, "entity/john");
+}
 
 /**
  * Creates at most one anonymous Supabase user, then hands them George.
@@ -86,9 +101,68 @@ export async function resetDemoSessionAction(): Promise<{ ok: boolean; reason?: 
   if (!decision.allowed) return { ok: false, reason: decision.reason };
 
   const { userId } = decision;
+
+  // Read BEFORE the reset. The reset deletes the fixture's John, and the
+  // family_contacts row cascades with it - so a reviewer who restarted would
+  // otherwise be asked for their email a second time, mid-demo. Same user,
+  // same derived entity, same address; nothing crosses between reviewers
+  // because every one of those three is keyed by this user id.
+  const email = await readDemoContactAddress(userId);
+
   const deps = createDemoFixtureDeps();
   await resetDemoFixture(deps, { userId, spec: DEMO_GEORGE });
   await seedDemoFixture(deps, { userId, spec: DEMO_GEORGE });
   await ensureBlankConversation(deps, { userId });
+
+  // Re-bound to the NEW row, which the derivation guarantees has the same id.
+  if (email) await saveDemoEmail(userId, email);
+
   return { ok: true };
+}
+
+/**
+ * Records where this reviewer's demo message should be sent.
+ *
+ * Demo configuration, not part of George's conversation: the older adult never
+ * sees this, and nothing about it reaches the chat. Authorized exactly like
+ * the reset - demo mode, a real session, and an anonymous account - because it
+ * writes a row that a later send will hand to a third-party transport.
+ *
+ * The user id comes only from validated claims. The form supplies one field.
+ */
+export async function configureDemoContactAction(
+  formData: FormData,
+): Promise<{ ok: boolean; reason?: string }> {
+  const demoMode = isDemoModeEnabled(process.env);
+  const decision = authorizeDemoReset({ demoMode, identity: await getCurrentIdentity() });
+  if (!decision.allowed) return { ok: false, reason: decision.reason };
+
+  const reading = readDemoEmail(String(formData.get("email") ?? ""));
+  if (!reading.ok) return { ok: false, reason: reading.reason };
+
+  await saveDemoEmail(decision.userId, reading.email);
+  redirect("/");
+}
+
+/** The one write. Bound to the derived entity, on the named channel. */
+async function saveDemoEmail(userId: string, email: string): Promise<void> {
+  const { familyContacts } = createFamilyContactDeps();
+  await familyContacts.ensure({
+    userId,
+    entityId: johnEntityId(userId),
+    channel: familyConfig.emailChannel,
+    address: email,
+    displayName: "John",
+  });
+}
+
+/** What the page needs to know: has this reviewer told us where to send? */
+export async function readDemoContactAddress(userId: string): Promise<string | null> {
+  const { familyContacts } = createFamilyContactDeps();
+  const contact = await familyContacts.findForEntityAndChannel(
+    userId,
+    johnEntityId(userId),
+    familyConfig.emailChannel,
+  );
+  return contact?.address ?? null;
 }

@@ -3,8 +3,17 @@ import { DemoResetButton } from "@/app/_components/dev-tools";
 import { DemoHint } from "@/app/_components/dev-hint";
 import { FamilyInboxLink } from "@/app/_components/dev-operator";
 import { resetDemoAction } from "@/app/_actions/demo";
-import { resetDemoSessionAction, startDemoAction } from "@/app/_actions/demo-session";
-import { DemoRestartButton, StartDemo } from "@/app/_components/demo-start";
+import {
+  configureDemoContactAction,
+  readDemoContactAddress,
+  resetDemoSessionAction,
+  startDemoAction,
+} from "@/app/_actions/demo-session";
+import {
+  DemoContactSetup,
+  DemoRestartButton,
+  StartDemo,
+} from "@/app/_components/demo-start";
 import { getCurrentIdentity } from "@/server/auth/current-user";
 import { isDebugSurfaceEnabled, isDemoModeEnabled } from "@/server/config";
 import { loadConversationView } from "@/server/services/conversation";
@@ -41,6 +50,12 @@ export default async function Page() {
         </p>
       </main>
     );
+  }
+
+  // A demo reviewer must say where John's message goes before the loop can
+  // close. Asked once, before the conversation, and never inside it.
+  if (demoMode && identity.isAnonymous && (await readDemoContactAddress(userId)) === null) {
+    return <DemoContactSetup action={configureDemoContactAction} />;
   }
 
   const view = await loadConversationView(createConversationDataDeps(), userId);

@@ -238,8 +238,29 @@ cleared sessions simply start a new demo, so abandoned anonymous users
 accumulate; that is accepted for a shared review link and is not cleaned up
 automatically.
 
+Before the conversation starts, a reviewer is asked once where John's demo
+message should go. A deployment delivers it by email through Brevo
+(`BREVO_API_KEY`, `BREVO_SENDER_EMAIL`, `BREVO_SENDER_NAME`); the email carries
+the exact approved sentence and a Reply link to the same
+`/family/respond/[token]` page the local demo uses. A 201 from Brevo means the
+provider ACCEPTED the message — not that it arrived, escaped a spam filter or
+was read, and `delivered` has always meant "handed to the transport".
+
+Every send declines tracking for its recipient
+(`contactPixelTrackingConsent: false`), so Brevo measures neither opens nor
+clicks for these emails. That is there for the clicks: click tracking rewrites
+links into individualized redirects, which would turn the Reply href from our
+capability URL into a Brevo URL resolving to it — putting a live family token
+through their redirector and into their click logs. The field is honoured only
+when per-contact tracking consent is enabled on the Brevo account
+(Settings → Contacts, unknown contacts set to **No**), so that setting is a
+precondition rather than a preference, and the field is sent anyway rather than
+trusting the default.
+
 Development is unchanged: `CARELOOP_DEV_USER_ID` still works locally and is
-still refused on any deployment.
+still refused on any deployment. Local delivery still goes to the development
+inbox and calls no provider, so no `BREVO_*` value is needed to run the app or
+the tests.
 
 ## Dev surfaces
 

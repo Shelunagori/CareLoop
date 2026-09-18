@@ -29,7 +29,10 @@ import { consentGrantsRepo } from "@/server/repositories/consent-grants";
 import { familyContactsRepo } from "@/server/repositories/family-contacts";
 import { familyResponsesRepo } from "@/server/repositories/family-responses";
 import { closuresRepo } from "@/server/repositories/closures";
-import { createDevNotifier } from "@/server/adapters/notifier";
+import { createDevNotifier, type Notifier } from "@/server/adapters/notifier";
+import { createBrevoEmailNotifier } from "@/server/adapters/brevo/email-notifier";
+import { familyConfig, isDebugSurfaceEnabled, isDemoModeEnabled } from "@/server/config";
+import { sha256Hex } from "@/core/share/text-hash";
 import type { ConversationDataDeps, ConversationDeps } from "./conversation";
 import type { IngestionDeps } from "./ingestion";
 import type { BaselineDebugDeps } from "./baseline-debug";
@@ -116,6 +119,73 @@ export function createConsentDeps(): ConsentDeps {
   };
 }
 
+export class NotifierNotConfiguredError extends Error {
+  readonly name = "NotifierNotConfiguredError";
+  constructor() {
+    super(
+      "No family transport is configured for this environment. " +
+        "Local development uses the development notifier; a deployment requires " +
+        "CARELOOP_DEMO_MODE=true and the BREVO_* settings. See .env.example.",
+    );
+  }
+}
+
+/**
+ * Which transport delivers a family message, and where it is addressed.
+ *
+ * This used to be `createDevNotifier()` unconditionally, and the audit found
+ * what that meant on a deployment: the dev notifier refuses to be constructed
+ * outside local development, so the throw happened while EVALUATING the
+ * argument - before `sendApprovedOpportunity` ran a single line. George
+ * approved, the turn logged `family.send_failed`, no family_request row was
+ * ever created, and nothing retried. The same throw silently disabled the
+ * expiry sweep on the line below it.
+ *
+ * So the choice is now explicit, an allow-list, and fails closed. There is
+ * deliberately NO fallback from email to the dev notifier: a deployment that
+ * cannot send email must stop, not quietly write into an in-process Map that
+ * nobody can read.
+ */
+function chooseNotifier(env: NodeJS.ProcessEnv = process.env): Notifier {
+  // Local development keeps the two-tab demo and never calls a provider.
+  if (isDebugSurfaceEnabled(env)) return createDevNotifier(env);
+  // A public demo deployment delivers by email. Missing BREVO_* settings throw
+  // FamilyEmailNotConfiguredError from the adapter, by name.
+  if (isDemoModeEnabled(env)) return createBrevoEmailNotifier(env);
+  throw new NotifierNotConfiguredError();
+}
+
+/**
+ * WHERE a family message is addressed, decided here rather than in the send.
+ *
+ * Local development ensures its own dev-inbox row, as it always has. A
+ * deployment REQUIRES an email contact that the reviewer configured for this
+ * exact entity, and returns null when there is none - which aborts the send
+ * before consent is consumed. Production never fabricates an address.
+ */
+function chooseContactResolver(
+  db: ReturnType<typeof createServiceRoleClient>,
+  env: NodeJS.ProcessEnv = process.env,
+): FamilySendDeps["resolveContact"] {
+  const contacts = familyContactsRepo(db);
+
+  if (isDebugSurfaceEnabled(env)) {
+    return async ({ userId, entityId, entityDisplayName }) =>
+      contacts.ensure({
+        userId,
+        entityId,
+        channel: familyConfig.devChannel,
+        // An opaque digest rather than the entity id: an address is handed to
+        // a transport, and internal identifiers have no business travelling.
+        address: `dev-inbox:${sha256Hex(`${userId}:${entityId}`).slice(0, 16)}`,
+        displayName: entityDisplayName,
+      });
+  }
+
+  return async ({ userId, entityId }) =>
+    contacts.findForEntityAndChannel(userId, entityId, familyConfig.emailChannel);
+}
+
 /**
  * The outbound leg. Constructed only in the after-response path and in dev
  * tooling, so the notifier is never instantiated on the hot path.
@@ -130,8 +200,21 @@ export function createFamilySendDeps(): FamilySendDeps {
     familyRequests: familyRequestsRepo(db),
     familyContacts: familyContactsRepo(db),
     entities: entitiesRepo(db),
-    notifier: createDevNotifier(),
+    notifier: chooseNotifier(),
+    resolveContact: chooseContactResolver(db),
   };
+}
+
+/**
+ * Just the contacts repository, for the demo's own configuration step.
+ *
+ * Narrow on purpose: recording where a demo message goes needs one table, and
+ * handing that action the whole send graph would give it a notifier it has no
+ * business holding.
+ */
+export function createFamilyContactDeps() {
+  const db = createServiceRoleClient();
+  return { familyContacts: familyContactsRepo(db) };
 }
 
 /** The family-facing surface. Reads one request by token hash; nothing else. */

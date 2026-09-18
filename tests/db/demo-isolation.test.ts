@@ -30,9 +30,16 @@ const id = (user: string, key: string) => fixtureUuid(DEMO_GEORGE.id, user, key)
 const count = async (sql: string, params: unknown[] = []) =>
   (await h.query<{ n: number }>(sql, params))[0].n;
 
-/** One reviewer's whole world: the cast, a conversation, history, and the loop. */
+/**
+ * One reviewer's whole world: the cast, a conversation, history, and the loop.
+ *
+ * Idempotent, because these tests share one database and a reviewer restarting
+ * is exactly "reset, then seed again" - so seeding begins by clearing this
+ * user's own fixture rows and nobody else's.
+ */
 async function seedWorld(user: string) {
   await h.query(`insert into auth.users (id) values ($1) on conflict do nothing`, [user]);
+  await resetWorld(user);
 
   for (const key of KEYS) {
     await h.query(
@@ -232,3 +239,121 @@ async function worldOf(user: string) {
   )[0].id;
   return { conversation };
 }
+
+describe("4. each reviewer's email contact is their own", () => {
+  const EMAIL_A = "a@example.test";
+  const EMAIL_B = "b@example.test";
+
+  /** Exactly what the demo's setup action writes. */
+  const configure = (user: string, email: string) =>
+    h.query(
+      `insert into public.family_contacts (user_id, entity_id, channel, address, display_name)
+       values ($1, $2, 'email', $3, 'John')
+       on conflict (user_id, entity_id, channel, address) do nothing`,
+      [user, id(user, "entity/john"), email],
+    );
+
+  /** Exactly what production send does: (user, entity, channel), never a name. */
+  const resolve = async (user: string) =>
+    (
+      await h.query<{ address: string }>(
+        `select address from public.family_contacts
+         where user_id = $1 and entity_id = $2 and channel = 'email'`,
+        [user, id(user, "entity/john")],
+      )
+    ).map((row) => row.address);
+
+  it("A's reconnect resolves only A's address, and B's only B's", async () => {
+    await seedWorld(A);
+    await seedWorld(B);
+    await configure(A, EMAIL_A);
+    await configure(B, EMAIL_B);
+
+    expect(await resolve(A)).toEqual([EMAIL_A]);
+    expect(await resolve(B)).toEqual([EMAIL_B]);
+  });
+
+  it("an approval for A can never address B", async () => {
+    // The entity id is the whole binding. A's John and B's John are different
+    // rows, so there is no query shape that reaches across.
+    expect(
+      await count(
+        `select count(*)::int as n from public.family_contacts
+         where user_id = $1 and address = $2`,
+        [A, EMAIL_B],
+      ),
+    ).toBe(0);
+    expect(
+      await count(
+        `select count(*)::int as n from public.family_contacts where entity_id = $1`,
+        [id(B, "entity/john")],
+      ),
+    ).toBe(1);
+  });
+
+  it("a reset deletes the contact with the entity, which is why it is restored", async () => {
+    // The cascade is the reason the reset has to read the address first: this
+    // is the row disappearing.
+    await resetWorld(A);
+    expect(await resolve(A)).toEqual([]);
+    // B untouched.
+    expect(await resolve(B)).toEqual([EMAIL_B]);
+  });
+
+  it("A's restart gives A back A's address, and leaves B's alone", async () => {
+    // The restart: read, reset, reseed, re-bind. The derived id is stable, so
+    // the address re-attaches to the same logical John.
+    await seedWorld(A);
+    await configure(A, EMAIL_A);
+
+    expect(await resolve(A)).toEqual([EMAIL_A]);
+    expect(await resolve(B)).toEqual([EMAIL_B]);
+
+    // And B restarting does not disturb A.
+    await resetWorld(B);
+    await seedWorld(B);
+    await configure(B, EMAIL_B);
+    expect(await resolve(A)).toEqual([EMAIL_A]);
+    expect(await resolve(B)).toEqual([EMAIL_B]);
+  });
+
+  it("A's token cannot read B's request", async () => {
+    // Token lookup is by hash, and a hash belongs to exactly one request row.
+    const requestOf = async (user: string) => {
+      const john = id(user, "entity/john");
+      const contact = (
+        await h.query<{ id: string }>(
+          `select id from public.family_contacts where user_id = $1 and entity_id = $2 and channel = 'email'`,
+          [user, john],
+        )
+      )[0].id;
+      const opportunity = (
+        await h.query<{ id: string }>(
+          `select id from public.reconnect_opportunities where user_id = $1 and entity_id = $2 limit 1`,
+          [user, john],
+        )
+      )[0].id;
+      return (
+        await h.query<{ id: string }>(
+          `insert into public.family_requests
+             (opportunity_id, contact_id, rendered_body, rendered_body_hash, payload,
+              access_token_hash, token_expires_at)
+           values ($1, $2, 'text', 'hash', '{}'::jsonb, $3, now() + interval '7 days')
+           returning id`,
+          [opportunity, contact, `hash-${user}`],
+        )
+      )[0].id;
+    };
+
+    const requestA = await requestOf(A);
+    const requestB = await requestOf(B);
+    expect(requestA).not.toBe(requestB);
+
+    // A's hash finds A's request and nothing else.
+    const found = await h.query<{ id: string }>(
+      `select id from public.family_requests where access_token_hash = $1`,
+      [`hash-${A}`],
+    );
+    expect(found.map((row) => row.id)).toEqual([requestA]);
+  });
+});

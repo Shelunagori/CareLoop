@@ -16,6 +16,20 @@ export type FamilyContactRecord = {
 export type FamilyContactsRepo = {
   findForEntity(userId: string, entityId: string): Promise<FamilyContactRecord | null>;
   /**
+   * The contact for ONE channel.
+   *
+   * `findForEntity` returns whichever row is oldest, which was unambiguous
+   * while "dev" was the only channel. Once a user can have both a dev-inbox
+   * and an email contact for the same person, "the first one" is a coin flip
+   * about where somebody's family message goes - so the caller names the
+   * channel it means.
+   */
+  findForEntityAndChannel(
+    userId: string,
+    entityId: string,
+    channel: string,
+  ): Promise<FamilyContactRecord | null>;
+  /**
    * Reached from a request during a delivery RETRY, where the entity is not in
    * hand and re-deriving the address would risk addressing a different
    * contact than the one the obligation was created against.
@@ -61,6 +75,20 @@ export function familyContactsRepo(db: Db): FamilyContactsRepo {
         .limit(1)
         .maybeSingle();
       if (error) throw new Error(`findFamilyContact failed: ${error.message}`);
+      return data ? toRecord(data) : null;
+    },
+
+    async findForEntityAndChannel(userId, entityId, channel) {
+      const { data, error } = await db
+        .from("family_contacts")
+        .select(SELECT)
+        .eq("user_id", userId)
+        .eq("entity_id", entityId)
+        .eq("channel", channel)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error) throw new Error(`findFamilyContactForChannel failed: ${error.message}`);
       return data ? toRecord(data) : null;
     },
 

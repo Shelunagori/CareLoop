@@ -65,6 +65,26 @@ export type FamilySendDeps = {
   familyContacts: FamilyContactsRepo;
   entities: EntitiesRepo;
   notifier: Notifier;
+  /**
+   * WHERE a family message goes, decided by composition rather than here.
+   *
+   * This used to be a `familyContacts.ensure` call in the middle of the send,
+   * fabricating a `dev-inbox:` address on a `dev` channel. That was a
+   * development assumption compiled into the production path: on a deployment
+   * it would have minted a contact nobody can reach and handed it to a real
+   * transport.
+   *
+   * So the send asks for a contact and does not know how one is found. Local
+   * development still ensures its dev-inbox row; production REQUIRES an email
+   * contact the reviewer configured, and returns null rather than guessing an
+   * address. Returning null aborts BEFORE the authorization transaction, so a
+   * missing contact never costs the person their consent.
+   */
+  resolveContact(input: {
+    userId: string;
+    entityId: string;
+    entityDisplayName: string;
+  }): Promise<FamilyContactRecord | null>;
 };
 
 export type SendOutcome =
@@ -72,6 +92,13 @@ export type SendOutcome =
   | { outcome: "already_sent"; requestId: string }
   | { outcome: "delivery_failed"; requestId: string; errorName: string }
   | { outcome: "integrity_failure"; failure: SendPrecheckFailure | string }
+  /**
+   * No transport contact exists for this recipient. Not an integrity failure -
+   * nothing is wrong with the approved artefact - and deliberately raised
+   * BEFORE consent is consumed, so the offer survives and the person can be
+   * asked to configure a destination.
+   */
+  | { outcome: "contact_not_configured" }
   | { outcome: "nothing_to_send" };
 
 /** What the atomic creation transaction can answer. */
@@ -201,17 +228,23 @@ export async function createAuthorizedRequest(
   const entity = entities.find((row) => row.id === opportunity.entityId);
   if (!entity) return fail({ outcome: "integrity_failure", failure: "entity_not_found" });
 
-  const contact = await deps.familyContacts.ensure({
+  // Asked for, never fabricated. Composition decides which channel this
+  // deployment delivers on; a null means there is nowhere to send, and we stop
+  // here - one line ABOVE the transaction that would have spent the consent.
+  const contact = await deps.resolveContact({
     userId: input.userId,
     entityId: opportunity.entityId,
-    channel: familyConfig.devChannel,
-    // The POC has no real address book. The handle is an opaque digest rather
-    // than the entity id: an address is handed to a third-party transport, and
-    // internal identifiers have no business travelling there. A real channel
-    // adapter supplies a real address; the shape is already right for it.
-    address: `dev-inbox:${sha256Hex(`${input.userId}:${opportunity.entityId}`).slice(0, 16)}`,
-    displayName: entity.displayName,
+    entityDisplayName: entity.displayName,
   });
+  if (!contact) {
+    logEvent({
+      event: "family.send_refused",
+      opportunityId: opportunity.id,
+      grantId: grant.id,
+      failure: "contact_not_configured",
+    });
+    return fail({ outcome: "contact_not_configured" });
+  }
 
   const token = mintFamilyToken();
   const result = (await callPendingRpc(deps.db, "create_authorized_family_request", {
