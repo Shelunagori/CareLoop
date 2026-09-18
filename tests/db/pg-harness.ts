@@ -30,9 +30,23 @@ const PLATFORM_BOOTSTRAP = `
   grant usage on schema public to anon, authenticated, service_role;
   alter default privileges in schema public
     grant execute on functions to anon, authenticated, service_role;
+  -- Supabase grants TABLE privileges to anon and authenticated by default, and
+  -- relies on RLS to constrain them. Without these the roles are stopped by a
+  -- missing GRANT rather than by a policy - which would make an RLS test pass
+  -- for entirely the wrong reason, and would hide a table whose policy was
+  -- never written.
+  alter default privileges in schema public
+    grant all on tables to anon, authenticated, service_role;
+  alter default privileges in schema public
+    grant all on sequences to anon, authenticated, service_role;
   create schema auth;
   create table auth.users (id uuid primary key default gen_random_uuid());
-  create function auth.uid() returns uuid language sql stable as $$ select null::uuid $$;
+  -- Reads the same request-local setting PostgREST populates from the JWT, so
+  -- a test can BE a signed-in user and let the real policies decide. Stable
+  -- rather than immutable, and null when unset, which is the anon case.
+  create function auth.uid() returns uuid language sql stable as $$
+    select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid
+  $$;
 `;
 
 export type Harness = {
@@ -40,6 +54,17 @@ export type Harness = {
   query<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<T[]>;
   exec(sql: string): Promise<void>;
   appliedMigrations: string[];
+  /**
+   * Runs `work` as a SIGNED-IN user: the `authenticated` role, with
+   * `auth.uid()` returning `userId`, exactly as a request carrying that user's
+   * JWT would arrive. Everything inside is subject to RLS - the role has no
+   * BYPASSRLS - and the session is returned to service_role afterwards even if
+   * the work throws.
+   *
+   * This is what makes the policies testable as BEHAVIOUR. Reading the SQL
+   * proves the policy was written; only this proves it decides anything.
+   */
+  asUser<T>(userId: string | null, work: () => Promise<T>): Promise<T>;
 };
 
 export async function createHarness(): Promise<Harness> {
@@ -52,9 +77,23 @@ export async function createHarness(): Promise<Harness> {
     appliedMigrations.push(file);
   }
 
-  return {
+  const harness: Harness = {
     db,
     appliedMigrations,
+    async asUser(userId, work) {
+      await db.exec("set role authenticated");
+      await db.query("select set_config('request.jwt.claim.sub', $1, false)", [
+        userId ?? "",
+      ] as never);
+      try {
+        return await work();
+      } finally {
+        // Back to the trusted role whatever happened, so one test cannot leave
+        // the next one quietly running as somebody.
+        await db.exec("reset role");
+        await db.query("select set_config('request.jwt.claim.sub', '', false)");
+      }
+    },
     async query<T = Record<string, unknown>>(sql: string, params?: unknown[]) {
       const result = await db.query<T>(sql, params as never);
       return result.rows;
@@ -63,6 +102,8 @@ export async function createHarness(): Promise<Harness> {
       await db.exec(sql);
     },
   };
+
+  return harness;
 }
 
 export type MaterializeResult = {
