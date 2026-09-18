@@ -1,5 +1,7 @@
 # CareLoop
 
+[![CI](https://github.com/Shelunagori/CareLoop/actions/workflows/ci.yml/badge.svg)](https://github.com/Shelunagori/CareLoop/actions/workflows/ci.yml)
+
 **An engineering exploration inspired by Olympia.**
 
 A long-term conversational companion for older adults. It learns the people and
