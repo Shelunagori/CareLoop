@@ -4,6 +4,7 @@ import { handleConsentReply, prepareOffer } from "@/server/services/consent";
 import { sendApprovedOpportunity } from "@/server/services/family-send";
 import { loadAwaitingFamilyReply, loadPendingClosure } from "@/server/services/closure";
 import { recordFamilyReply } from "@/server/services/family-response";
+import { contradictsClosure } from "@/core/family/closure-contradiction";
 import { assembleContext, EMPTY_MEMORY } from "@/server/services/context";
 import { handleTurn } from "@/server/services/conversation";
 import { buildConsentHooks } from "@/server/services/consent-hooks";
@@ -407,5 +408,126 @@ describe("the WIRING — a real turn actually carries the awaiting state", () =>
     for (const secret of [TEXT, store.requests[0].id, store.delivered[0].responseUrl]) {
       expect(sent, secret).not.toContain(secret);
     }
+  });
+});
+
+describe("a closure turn cannot show a contradiction", () => {
+  /**
+   * THE EXACT PRODUCTION FAILURE. The closure surfaced correctly and the
+   * model's continuation immediately followed it with "You're welcome, I hope
+   * you hear from John soon."
+   *
+   * Driven through the real `handleTurn`, the real hooks and the real persist
+   * path, with the model stubbed to produce the sentence it actually produced.
+   * Stubbing the model here is the point: the guard's job is to be right about
+   * output it does not control.
+   */
+  async function closureTurnSaying(modelSays: string) {
+    const { store, deps: services } = await deliveredAndUnanswered();
+    const url = store.delivered[0].responseUrl;
+    await recordFamilyReply(services.family, {
+      token: url.slice(url.lastIndexOf("/") + 1),
+      choiceId: "yes_weekend",
+    });
+
+    const log: CallLog = [];
+    const repos = fakeRepos({ log, ownedConversationIds: ["conv-1"] });
+    const turn = await handleTurn(
+      {
+        conversations: repos.conversations,
+        messages: repos.messages,
+        jobs: fakeJobs({ log }).repo,
+        llm: fakeLlm({ log, chunks: [modelSays] }),
+        memory: async () => EMPTY_MEMORY,
+        consent: buildConsentHooks({ consent: services.consent, closure: services.closure }),
+        opportunities: services.consent.opportunities,
+        entities: services.consent.entities,
+      },
+      { userId: USER, conversationId: "conv-1", text: "Thank you." },
+    );
+
+    const events = await drainEvents(turn.stream);
+    const shown = events
+      .filter((e): e is Extract<typeof e, { type: "closure" | "delta" }> =>
+        e.type === "closure" || e.type === "delta",
+      )
+      .map((e) => (e.type === "closure" ? e.sentence : e.text))
+      .join("");
+    const persisted = repos.assistantMessages().at(-1)?.content ?? "";
+
+    return { events, shown, persisted };
+  }
+
+  it("the production sentence is suppressed, and the closure survives", async () => {
+    const { shown, persisted } = await closureTurnSaying(
+      "You're welcome, I hope you hear from John soon.",
+    );
+
+    // The verified fact is untouched - it is the application's, not the model's.
+    expect(shown).toContain("John replied");
+    expect(persisted).toContain("John replied");
+
+    // The contradiction reached neither the screen nor the database.
+    expect(shown).not.toContain("hope you hear from John soon");
+    expect(persisted).not.toContain("hope you hear from John soon");
+
+    // And something warm was said instead.
+    expect(shown).toContain("I hope the visit goes well");
+  });
+
+  for (const variant of [
+    "I'll let you know when he replies.",
+    "I haven't heard from him yet.",
+    "Hopefully John gets back to you soon.",
+    "We're still waiting for John.",
+  ]) {
+    it(`suppresses: "${variant}"`, async () => {
+      const { shown, persisted } = await closureTurnSaying(variant);
+
+      expect(shown).toContain("John replied");
+      for (const text of [shown, persisted]) {
+        expect(contradictsClosure(text.replace(/^[\s\S]*John replied[^.]*\.\s*/, "")).contradicts).toBe(
+          false,
+        );
+      }
+    });
+  }
+
+  it("a warm, non-contradictory reply is passed through UNTOUCHED", async () => {
+    // The guard replaces wholesale, so a false positive costs a real answer.
+    const { shown, persisted } = await closureTurnSaying(
+      "That's lovely news. How are you feeling about it?",
+    );
+
+    expect(shown).toContain("That's lovely news. How are you feeling about it?");
+    expect(persisted).toContain("That's lovely news. How are you feeling about it?");
+    expect(shown).not.toContain("I hope the visit goes well");
+  });
+
+  it("an ordinary turn with no closure is never buffered or filtered", async () => {
+    // The guard must not touch the other 99% of conversation: "I haven't
+    // heard from her" is a perfectly true thing to say when nothing has been
+    // sent, and suppressing it would be its own grounding bug.
+    const { store, deps: services } = await deliveredAndUnanswered();
+    store.requests[0].status = "pending";
+
+    const log: CallLog = [];
+    const repos = fakeRepos({ log, ownedConversationIds: ["conv-1"] });
+    const turn = await handleTurn(
+      {
+        conversations: repos.conversations,
+        messages: repos.messages,
+        jobs: fakeJobs({ log }).repo,
+        llm: fakeLlm({ log, chunks: ["I haven't heard from him yet."] }),
+        memory: async () => EMPTY_MEMORY,
+        consent: buildConsentHooks({ consent: services.consent, closure: services.closure }),
+        opportunities: services.consent.opportunities,
+        entities: services.consent.entities,
+      },
+      { userId: USER, conversationId: "conv-1", text: "Any news?" },
+    );
+    await drainEvents(turn.stream);
+
+    expect(repos.assistantMessages().at(-1)?.content).toContain("I haven't heard from him yet.");
   });
 });

@@ -6,6 +6,10 @@ import type { MessagesRepo, StoredMessage } from "@/server/repositories/messages
 import { assembleContext, EMPTY_MEMORY, type MemorySections } from "./context";
 import type { ConsentOutcome, OfferResult } from "./consent";
 import type { AwaitingFamilyReply, PendingClosure } from "./closure";
+import {
+  contradictsClosure,
+  safeClosureContinuation,
+} from "@/core/family/closure-contradiction";
 import type { OpportunitiesRepo } from "@/server/repositories/opportunities";
 import type { EntitiesRepo } from "@/server/repositories/entities";
 import type { ProfilesRepo } from "@/server/repositories/profiles";
@@ -280,6 +284,10 @@ export async function handleTurn(
       userMessageId: userMessage.id,
       closureSentence: closure?.sentence ?? null,
       closureId: closure?.closureId ?? null,
+      // Derived from the verified fact, ready in case the model contradicts
+      // it. Computed here rather than in the stream so the safe sentence
+      // never depends on anything the model produced.
+      closureFallback: closure ? safeClosureContinuation(closure.fact) : null,
       offer: presenting,
     }),
   };
@@ -333,6 +341,7 @@ async function handleConsentTurn(
       userMessageId: input.userMessageId,
       closureSentence: null,
       closureId: null,
+      closureFallback: null,
       offer: null,
     }),
   };
@@ -364,6 +373,8 @@ async function* persistOnSuccess(
     /** M5: a factual closure line, stated by the application, not the model. */
     closureSentence: string | null;
     closureId: string | null;
+    /** M5+: the deterministic continuation, used only if the model contradicts. */
+    closureFallback: string | null;
     /** M5: the offer, appended verbatim after the model has finished. */
     offer: OfferResult & { outcome: "offered" | "represented" } | null;
   },
@@ -378,9 +389,47 @@ async function* persistOnSuccess(
     yield { type: "closure", sentence: turn.closureSentence };
   }
 
-  for await (const delta of deltas) {
-    full += delta;
-    yield { type: "delta", text: delta };
+  if (turn.closureSentence !== null) {
+    /**
+     * ON A CLOSURE TURN THE MODEL'S WORDS ARE BUFFERED, NOT RELAYED.
+     *
+     * Streaming and checking are incompatible: by the time a contradiction is
+     * visible in the text, it is already on the person's screen, and an
+     * after-the-fact correction is worse than the original - it makes the
+     * companion look like it is arguing with itself about whether their son
+     * called.
+     *
+     * So this one kind of turn waits for the whole completion before showing
+     * any of it. Closure turns are rare, they already open with a
+     * deterministic sentence the person can read, and first-token latency is
+     * a straightforward trade against telling somebody their family has not
+     * been in touch when they have.
+     */
+    let generated = "";
+    for await (const delta of deltas) generated += delta;
+
+    const verdict = contradictsClosure(generated);
+    const text = verdict.contradicts ? (turn.closureFallback ?? "") : generated;
+
+    if (verdict.contradicts) {
+      // The RULE that matched, never the sentence. A suppressed line is still
+      // the person's conversation, and it is not log material.
+      console.log(
+        JSON.stringify({
+          event: "chat.closure_contradiction_suppressed",
+          rule: verdict.rule,
+          generatedChars: generated.length,
+        }),
+      );
+    }
+
+    full += text;
+    if (text.length > 0) yield { type: "delta", text };
+  } else {
+    for await (const delta of deltas) {
+      full += delta;
+      yield { type: "delta", text: delta };
+    }
   }
 
   if (full.trim().length === 0) throw new EmptyCompletionError();
