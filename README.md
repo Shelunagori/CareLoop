@@ -190,6 +190,29 @@ Committed model ids:
 | Embeddings | `@cf/baai/bge-m3` |
 | Transcription | `@cf/openai/whisper-large-v3-turbo` |
 
+### Observed production latency
+
+| Path | Sample | p50 | p95 |
+|---|---:|---:|---:|
+| Chat — first response chunk | n=12 | 2.0 s | 4.5 s |
+| Chat — complete turn | n=12 | 3.1 s | 7.9 s |
+| Voice transcription — fixed 7.9 s audio sample | n=12 | 3.0 s | 4.9 s |
+
+Small production sample measured against the deployed Vercel application after
+warm-up; these are observed timings, not an SLA or load-test result. Requests
+were issued one at a time from a single browser on the deployed origin, so
+nothing here says anything about concurrency, other regions or weak networks.
+No request failed. "First response chunk" is the first byte of the NDJSON
+stream reaching the browser, which is not the same thing as model
+time-to-first-token. Percentiles are nearest-rank, so at n=12 the p95 is the
+slowest run observed.
+
+The slowest chat sample (7.9 s) also triggered a reconnect offer, so it
+exercised additional rendering work beyond a simple conversational turn; it is
+intentionally retained rather than excluded as an outlier. The fixed
+transcription sample measures endpoint latency, not transcription quality
+across microphones, accents or noisy environments.
+
 ## What live testing changed
 
 Each came from running the thing for real. The pattern is the same all three

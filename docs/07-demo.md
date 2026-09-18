@@ -83,9 +83,10 @@ npm run dev
 | **B** | `localhost:3000/dev/family-inbox` | John's phone |
 
 Tab B is a **development-only** page and a demo prop. It shows the development
-notifier's outbox — the same messages that would have gone out as SMS — so both
-ends of the reconnect loop can be seen without a terminal. Outside local
-development it is a 404, and nothing about it reaches a production bundle.
+notifier's outbox — the same messages that would be sent through the real
+delivery transport — so both ends of the reconnect loop can be seen without a
+terminal. Outside local development it is a 404, and nothing about it reaches a
+production bundle.
 
 > Open it on **`localhost`**, not on the LAN URL `next dev` prints beside it.
 > The page holds a live family reply link, so it renders only for a loopback

@@ -7,9 +7,10 @@
 # NO SECRETS ARE NEEDED, AND NONE ARE GRANTED. The suite is env-independent:
 # it runs against PGlite rather than a real Postgres, every provider is stubbed
 # at the HTTP boundary, and the contract tests that would reach a live model
-# are excluded from `vitest run` by config. Verified by running the whole suite
-# with every variable in .env.example unset. A step that suddenly needs a
-# credential is a design change, not a CI change.
+# are excluded from `vitest run` by config. CI intentionally runs without
+# application secrets. A clean tracked-only checkout must pass lint, typecheck,
+# tests and build. A step that suddenly needs a credential is a design change,
+# not a CI change.
 name: CI
 
 on:
