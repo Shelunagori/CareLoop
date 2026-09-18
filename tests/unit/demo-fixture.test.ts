@@ -391,6 +391,20 @@ const DEV_ONLY_FILES = [
 /** The PUBLIC demo's own files. Gated by CARELOOP_DEMO_MODE. */
 const PUBLIC_DEMO_FILES = ["app/_actions/demo-session.ts", "app/_components/demo-start.tsx"];
 
+/**
+ * A DIFFERENT exemption, deliberately not folded into the list above.
+ *
+ * `DEMO_ONLY_FILES` means "may touch the fixture", which is why every entry
+ * must sit behind a gate. The reviewer page is not that: it names the cast in
+ * PROSE, walking a reviewer through the demo script, and holds no product
+ * logic at all. Publicly reachable is the point of it.
+ *
+ * So it is exempted from the name check only, and the test below pays for that
+ * exemption by proving the page is inert - no fixture import, no service, no
+ * database, no session. If it ever stops being inert, it stops being exempt.
+ */
+const STATIC_DOC_FILES = ["app/review/page.tsx"];
+
 /** Everything allowed to name the cast, for whichever reason. */
 const DEMO_ONLY_FILES = [...DEV_ONLY_FILES, ...PUBLIC_DEMO_FILES];
 
@@ -430,11 +444,72 @@ describe("6. the demo names never reach production code", () => {
       .map((file) => file.replace(/\\/g, "/"))
       .filter((file) => !FIXTURE_PATHS.some((prefix) => file.startsWith(prefix)));
 
+  it("the WHOLE review subtree holds no logic at all", () => {
+    /**
+     * The price of naming the cast without a gate, and it is charged against
+     * the entire implementation rather than one file.
+     *
+     * The exemption above is one exact path, `app/review/page.tsx`. That alone
+     * would be worth very little: a future page.tsx could import
+     * `./review-runtime`, and THAT file could reach a service or the database
+     * while page.tsx still passed a check on its own imports. The exemption
+     * is narrow; the proof that earns it has to cover everything the exempted
+     * file can reach.
+     *
+     * So every .ts and .tsx under `app/review/` is inspected, including files
+     * that do not exist yet.
+     */
+    const subtree = walk("app/review").map((file) => file.replace(/\\/g, "/"));
+    expect(subtree, "app/review/ has no source files").not.toHaveLength(0);
+    expect(subtree, "the exempted page is not in the subtree it is checked by").toContain(
+      "app/review/page.tsx",
+    );
+
+    for (const file of subtree) {
+      const source = readFileSync(file, "utf8");
+
+      /**
+       * PATH-SHAPED reaches are judged by what the file IMPORTS, not by raw
+       * containment. The page documents the repository layout, so
+       * "server/services/" and "core/" appear in it as sentences ABOUT the
+       * code. Rewriting that prose to satisfy a substring match would be
+       * gaming the check, and an import is the only way a file can actually
+       * reach any of these.
+       */
+      const imports = [...source.matchAll(/from\s+"([^"]+)"/g)].map((match) => match[1]);
+      for (const specifier of imports) {
+        for (const forbidden of ["server/", "core/", "@supabase", "demo-fixture", "/api/"]) {
+          expect(specifier, `${file} imports ${specifier}`).not.toContain(forbidden);
+        }
+        // Relative imports stay inside the subtree: `../_components/x` would
+        // leave it, and `./_parts` is exactly what is allowed.
+        if (specifier.startsWith(".")) {
+          expect(specifier, `${file} reaches outside app/review/`).not.toContain("..");
+        }
+      }
+
+      /**
+       * CODE-SHAPED reaches are judged by raw containment: none of these has
+       * any business appearing in a static page, in prose or otherwise.
+       */
+      for (const forbidden of [
+        "process.env",
+        "getCurrentUserId",
+        "createServiceRoleClient",
+        "fetch(",
+        "use client",
+      ]) {
+        expect(source, `${file}: ${forbidden}`).not.toContain(forbidden);
+      }
+    }
+  });
+
   it("no demo name appears in executable production code", () => {
     const offenders: string[] = [];
     for (const file of productionFiles()) {
       if (PROMPT_EXAMPLES.includes(file)) continue;
       if (DEMO_ONLY_FILES.includes(file)) continue;
+      if (STATIC_DOC_FILES.includes(file)) continue;
       const code = stripComments(readFileSync(file, "utf8"), file);
       for (const name of NAMES) {
         if (new RegExp(`\\b${name}\\b`).test(code)) offenders.push(`${file}: ${name}`);
