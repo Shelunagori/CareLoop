@@ -200,6 +200,56 @@ instruction to the prompt".
 | **2** | After a genuine reply, the deterministic update was followed by contradictory generated language. | Verified closure turns became fully deterministic — the conversational model is not invoked. |
 | **3** | A wake-word prototype was not reliable enough for a dependable product experience. | Removed it and kept push-to-talk. Four general correctness fixes it surfaced were retained. |
 
+## AI-assisted development workflow
+
+Coding agents were used heavily here: bounded implementation tasks, repetitive
+repository work, test generation, refactors, targeted investigation of
+unfamiliar code, and drafting documentation. That acceleration is real and
+worth being plain about.
+
+It is not the same thing as engineering authority. The product hypothesis, the
+system architecture, the trust and privacy boundaries, the decision about what
+is deterministic and what may be probabilistic, the data-sharing rules, the
+acceptance criteria, the final review of generated changes, the production
+validation, and every architectural change made after a failure was discovered
+— those were mine.
+
+```
+product hypothesis / architecture
+        ↓
+explicit invariants + acceptance criteria
+        ↓
+bounded implementation task
+        ↓
+coding agent implementation
+        ↓
+tests + lint + typecheck
+        ↓
+diff review
+        ↓
+adversarial / mutation / live testing
+        ↓
+production observation
+        ↓
+change the architecture when the boundary is wrong
+```
+
+The last step is the one that matters. During live testing the conversational
+model produced a plausible family reply before any real reply existed. The
+response was not to write a firmer prompt. It was to inspect the persisted
+family-request and family-response state, recognise that an external-world
+truth had been left inside the model's authority, and move waiting/reply state
+into deterministic application state. A later live test surfaced a
+contradictory continuation after a genuine reply, and the answer there was
+architectural too: verified closure turns no longer invoke the conversational
+model at all.
+
+Accelerating implementation is not delegating system authority. Where an
+action, a privacy boundary or an external-world fact is involved, the decision
+stayed in application code — and the decision about *which* those are stayed
+with me. [What live testing changed](#what-live-testing-changed) has the
+detail.
+
 ## Privacy and safety
 
 - No medical diagnosis
@@ -422,6 +472,44 @@ flag — dormant code that still passes its tests is the kind nobody can explain
 a year later. Four general correctness fixes it surfaced were kept: the consent
 qualifier rule, the pinned transcription language, empty-transcript safety, and
 the distinction between "I didn't catch that" and "that recording failed".
+
+#### Voice scope and a production path
+
+What exists today is one path, and it is deliberately simple:
+
+```
+push-to-talk  →  complete recording  →  transcription
+              →  transcript appears as editable composer text
+              →  explicit submission by the person
+              →  the existing conversation pipeline
+              →  optional ElevenLabs speech output
+```
+
+**Voice is I/O. It is not a second reasoning path.** There is one
+conversational source of truth, the transcript is visible and editable before
+anything is sent, state transitions are predictable, a mishearing is recovered
+by editing rather than by undoing a message, and a reliable press beats an
+unreliable hands-free mode. CareLoop does **not** currently do streaming
+speech-to-text, duplex audio, barge-in, interruption handling, streaming
+text-to-speech or continuous listening.
+
+A production speech-to-speech system would likely evolve toward:
+
+```
+streaming audio  →  VAD / endpointing  →  streaming STT
+                 →  incremental turn state  →  streaming model output
+                 →  streaming TTS  →  cancellation / barge-in
+```
+
+Most of the difficulty there is not in the pipeline diagram. It is in
+interruption and barge-in, endpoint detection, noisy rooms, accents,
+speakerphone, Bluetooth and hearing-aid audio paths, recovery from partial
+transcription, and weak networks — none of which can be settled without real
+product and device testing. This is a direction, not a capability claim.
+
+Latency and cost are measurements rather than assumptions; a production
+evaluation would separately track transcription latency, time-to-first-token,
+turn completion, TTS start time, failure rate and provider usage.
 
 ### A family reply is an external-world fact
 

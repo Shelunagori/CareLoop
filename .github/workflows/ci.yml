@@ -1,0 +1,67 @@
+# The checks that must hold before anything merges.
+#
+# Exactly the four commands a contributor runs locally, in the same order and
+# under the same Node the project pins — so a green pull request means the same
+# thing as a clean working copy, and CI can never be a different bar.
+#
+# NO SECRETS ARE NEEDED, AND NONE ARE GRANTED. The suite is env-independent:
+# it runs against PGlite rather than a real Postgres, every provider is stubbed
+# at the HTTP boundary, and the contract tests that would reach a live model
+# are excluded from `vitest run` by config. Verified by running the whole suite
+# with every variable in .env.example unset. A step that suddenly needs a
+# credential is a design change, not a CI change.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Read-only. This workflow inspects the code and reports; it publishes
+# nothing, comments nothing and deploys nothing.
+permissions:
+  contents: read
+
+# One run per branch or pull request. A superseded run is answering a question
+# nobody is asking any more.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Lint, typecheck, test and build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Use Node 22
+        uses: actions/setup-node@v4
+        with:
+          # Matches `engines.node` and .nvmrc. A version drift between here and
+          # a developer's machine is how a green CI stops being evidence.
+          node-version: 22
+          cache: npm
+
+      # `ci`, not `install`: the lockfile is the input, and a run that silently
+      # resolved a different tree would not be testing what ships.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Tests
+        run: npm test
+
+      # Run deliberately WITHOUT application secrets. If a future change
+      # introduces a build-time dependency on runtime credentials, this step
+      # should fail here rather than hide that dependency.
+      - name: Build
+        run: npm run build
