@@ -205,6 +205,39 @@ export async function handleTurn(
       text: input.text,
     });
     if (answered) return answered;
+
+    /**
+     * 3b. A VERIFIED CLOSURE ENDS THE TURN, DETERMINISTICALLY.
+     *
+     * Whether a family member replied is an external-world fact. The
+     * application owns it end to end - the sentence that STATES it and the
+     * sentence that follows it - and the model has no authority over either.
+     *
+     * Two rounds of guarding taught this. First the model announced a reply
+     * that never happened; the turn was given deterministic state saying
+     * none had. Then it followed a real closure with "I hope you hear from
+     * John soon"; a post-generation guard caught that. Then it produced
+     * "Actually, I had told you earlier that John did reply..." on the very
+     * first turn the reply was surfaced - false about the conversation's own
+     * history, and matching no still-waiting pattern because it is not a
+     * still-waiting sentence. It was a THIRD kind of invention.
+     *
+     * Each guard was a prediction about which sentences a model might write.
+     * There is no reason to believe the fourth kind would be predicted either.
+     * So the model is not asked. The whole response is two deterministic
+     * sentences, and the class of failure is closed rather than narrowed.
+     *
+     * It also runs BEFORE memory retrieval and the offer check: neither is
+     * needed to say two fixed sentences, and `prepareOffer` has a side effect
+     * (it marks an opportunity offered) that must not fire on a turn which
+     * will not show the card.
+     */
+    const closed = await handleClosureTurn(deps, {
+      userId: input.userId,
+      conversationId: conversation.id,
+      userMessageId: userMessage.id,
+    });
+    if (closed) return closed;
   }
 
   // 4. Bounded recent turns. This query already includes the message persisted
@@ -233,14 +266,13 @@ export async function handleTurn(
   //    show. BOTH are decided here, before the model is called, and both reach
   //    the model as markers only — the family reply's wording and the outbound
   //    draft's bytes are inserted by application code, never by generation.
-  let closure: PendingClosure | null = null;
   let awaiting: AwaitingFamilyReply | null = null;
   let offer: OfferResult | null = null;
   if (deps.consent) {
-    closure = await deps.consent.loadClosure({ userId: input.userId });
-    // Only when nothing has arrived. A closure IS the news; the two can never
-    // both be true, and the repository cannot return both.
-    awaiting = closure ? null : await deps.consent.loadAwaitingReply({ userId: input.userId });
+    // No closure load here: step 3b already returned if one existed, so
+    // reaching this line PROVES there is none. The awaiting state is the only
+    // family fact a generated turn can carry.
+    awaiting = await deps.consent.loadAwaitingReply({ userId: input.userId });
     offer = await deps.consent.prepareOffer({
       userId: input.userId,
       recentMessages: recentTurns,
@@ -255,7 +287,9 @@ export async function handleTurn(
     recentTurns,
     memory: {
       ...memory,
-      pendingClosure: closure?.marker ?? null,
+      // Always null on a generated turn: step 3b returned if a closure
+      // existed, so the model is never handed one to talk about.
+      pendingClosure: null,
       awaitingFamilyReply: awaiting
         ? { entityName: awaiting.entityName, status: "awaiting_response" }
         : null,
@@ -282,13 +316,54 @@ export async function handleTurn(
       userId: input.userId,
       conversationId: conversation.id,
       userMessageId: userMessage.id,
-      closureSentence: closure?.sentence ?? null,
-      closureId: closure?.closureId ?? null,
-      // Derived from the verified fact, ready in case the model contradicts
-      // it. Computed here rather than in the stream so the safe sentence
-      // never depends on anything the model produced.
-      closureFallback: closure ? safeClosureContinuation(closure.fact) : null,
+      // A generated turn never carries a closure - step 3b took that branch.
+      closureSentence: null,
+      closureId: null,
+      closureFallback: null,
       offer: presenting,
+    }),
+  };
+}
+
+/**
+ * The deterministic closure leg.
+ *
+ * Returns a finished turn whenever a verified family response is waiting to be
+ * surfaced, and null otherwise. Both sentences come from application code:
+ * `renderClosureSentence` states what was actually answered, and
+ * `safeClosureContinuation` adds warmth derived only from the verified topic
+ * and intent. No model is called, so there is nothing to guard.
+ */
+async function handleClosureTurn(
+  deps: ConversationDeps,
+  input: { userId: string; conversationId: string; userMessageId: string },
+): Promise<TurnResult | null> {
+  const closure = await deps.consent!.loadClosure({ userId: input.userId });
+  if (!closure) return null;
+
+  const continuation = safeClosureContinuation(closure.fact);
+
+  return {
+    conversationId: input.conversationId,
+    userMessageId: input.userMessageId,
+    pendingSendOpportunityId: null,
+    deterministic: true,
+    stream: persistOnSuccess(deps, deterministicDeltas(continuation), {
+      userId: input.userId,
+      conversationId: input.conversationId,
+      userMessageId: input.userMessageId,
+      closureSentence: closure.sentence,
+      closureId: closure.closureId,
+      // The same sentence the deltas carry, so the contradiction guard in
+      // persistOnSuccess is an identity here. It stays wired as a backstop:
+      // if anyone ever routes a model back through a closure turn, it still
+      // refuses to show a contradiction.
+      closureFallback: continuation,
+      // An offer is not presented alongside a closure. `prepareOffer` is not
+      // called on this path at all, so the opportunity stays open and is
+      // offered on the next turn rather than being marked offered by a turn
+      // that never drew the card.
+      offer: null,
     }),
   };
 }

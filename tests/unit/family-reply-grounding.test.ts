@@ -117,6 +117,50 @@ beforeEach(() => {
   resetM5Ids();
 });
 
+/**
+ * A real closure turn, driven end to end, with the model stubbed to say
+ * whatever the caller names. Shared because the assertions about it fall into
+ * two groups: that a contradiction cannot appear, and that nothing the model
+ * said appears at all.
+ */
+async function closureTurnSaying(modelSays: string, choiceId = "yes_weekend") {
+  const { store, deps: services } = await deliveredAndUnanswered();
+  const url = store.delivered[0].responseUrl;
+  await recordFamilyReply(services.family, {
+    token: url.slice(url.lastIndexOf("/") + 1),
+    choiceId,
+  });
+
+  const log: CallLog = [];
+  const repos = fakeRepos({ log, ownedConversationIds: ["conv-1"] });
+  const llm = fakeLlm({ log, chunks: [modelSays] });
+  const turn = await handleTurn(
+    {
+      conversations: repos.conversations,
+      messages: repos.messages,
+      jobs: fakeJobs({ log }).repo,
+      llm,
+      memory: async () => EMPTY_MEMORY,
+      consent: buildConsentHooks({ consent: services.consent, closure: services.closure }),
+      opportunities: services.consent.opportunities,
+      entities: services.consent.entities,
+    },
+    { userId: USER, conversationId: "conv-1", text: "Thank you." },
+  );
+
+  const events = await drainEvents(turn.stream);
+  const shown = events
+    .filter((e): e is Extract<typeof e, { type: "closure" | "delta" }> =>
+      e.type === "closure" || e.type === "delta",
+    )
+    .map((e) => (e.type === "closure" ? e.sentence : e.text))
+    .join("");
+  const persisted = repos.assistantMessages().at(-1)?.content ?? "";
+
+  return { events, shown, persisted, log, llm, store, services };
+}
+
+
 describe("the production state: delivered, zero responses, zero closures", () => {
   it("reproduces exactly what the live database showed", async () => {
     const { store } = await deliveredAndUnanswered();
@@ -422,41 +466,6 @@ describe("a closure turn cannot show a contradiction", () => {
    * Stubbing the model here is the point: the guard's job is to be right about
    * output it does not control.
    */
-  async function closureTurnSaying(modelSays: string) {
-    const { store, deps: services } = await deliveredAndUnanswered();
-    const url = store.delivered[0].responseUrl;
-    await recordFamilyReply(services.family, {
-      token: url.slice(url.lastIndexOf("/") + 1),
-      choiceId: "yes_weekend",
-    });
-
-    const log: CallLog = [];
-    const repos = fakeRepos({ log, ownedConversationIds: ["conv-1"] });
-    const turn = await handleTurn(
-      {
-        conversations: repos.conversations,
-        messages: repos.messages,
-        jobs: fakeJobs({ log }).repo,
-        llm: fakeLlm({ log, chunks: [modelSays] }),
-        memory: async () => EMPTY_MEMORY,
-        consent: buildConsentHooks({ consent: services.consent, closure: services.closure }),
-        opportunities: services.consent.opportunities,
-        entities: services.consent.entities,
-      },
-      { userId: USER, conversationId: "conv-1", text: "Thank you." },
-    );
-
-    const events = await drainEvents(turn.stream);
-    const shown = events
-      .filter((e): e is Extract<typeof e, { type: "closure" | "delta" }> =>
-        e.type === "closure" || e.type === "delta",
-      )
-      .map((e) => (e.type === "closure" ? e.sentence : e.text))
-      .join("");
-    const persisted = repos.assistantMessages().at(-1)?.content ?? "";
-
-    return { events, shown, persisted };
-  }
 
   it("the production sentence is suppressed, and the closure survives", async () => {
     const { shown, persisted } = await closureTurnSaying(
@@ -493,15 +502,36 @@ describe("a closure turn cannot show a contradiction", () => {
     });
   }
 
-  it("a warm, non-contradictory reply is passed through UNTOUCHED", async () => {
-    // The guard replaces wholesale, so a false positive costs a real answer.
-    const { shown, persisted } = await closureTurnSaying(
-      "That's lovely news. How are you feeling about it?",
-    );
+  it("even a PERFECTLY GOOD model reply never appears", async () => {
+    /**
+     * The final hardening, and the reason guarding was abandoned. A third
+     * failure got through both previous fixes: "Actually, I had told you
+     * earlier that John did reply to a message..." - false about the
+     * conversation's own history, on the very first turn the reply was
+     * surfaced, and matching no still-waiting pattern because it is not a
+     * still-waiting sentence.
+     *
+     * Every guard was a prediction about which sentences a model might
+     * produce. So the model is no longer asked. This asserts the strong
+     * version: not "bad output is filtered" but "output is not used", which
+     * is the only form that closes the class rather than narrowing it.
+     */
+    const good = "That's lovely news. How are you feeling about it?";
+    const { shown, persisted } = await closureTurnSaying(good);
 
-    expect(shown).toContain("That's lovely news. How are you feeling about it?");
-    expect(persisted).toContain("That's lovely news. How are you feeling about it?");
-    expect(shown).not.toContain("I hope the visit goes well");
+    expect(shown).not.toContain(good);
+    expect(persisted).not.toContain(good);
+    expect(shown).toContain("I hope the visit goes well");
+  });
+
+  it("the production sentence that defeated the guard cannot appear", async () => {
+    const invented = "Actually, I had told you earlier that John did reply to a message.";
+    const { shown, persisted } = await closureTurnSaying(invented);
+
+    expect(shown).not.toContain("I had told you earlier");
+    expect(persisted).not.toContain("I had told you earlier");
+    expect(shown).toContain("John replied");
+    expect(shown).toContain("I hope the visit goes well");
   });
 
   it("an ordinary turn with no closure is never buffered or filtered", async () => {
@@ -530,4 +560,93 @@ describe("a closure turn cannot show a contradiction", () => {
 
     expect(repos.assistantMessages().at(-1)?.content).toContain("I haven't heard from him yet.");
   });
+});
+
+describe("the closure turn is fully deterministic", () => {
+  async function closureTurn(choiceId = "yes_weekend") {
+    return closureTurnSaying("THE MODEL SHOULD NEVER BE ASKED", choiceId);
+  }
+
+  it("the conversational LLM is NOT invoked", async () => {
+    const { log, llm } = await closureTurn();
+
+    // The strongest available proof: the provider recorded no call, and
+    // captured no request.
+    expect(log).not.toContain("llm.streamChat");
+    expect(llm.lastRequest()).toBeNull();
+  });
+
+  it("both sentences are the application's own", async () => {
+    const { shown, services, store } = await closureTurn();
+    const closure = await loadPendingClosure(services.closure, { userId: USER });
+
+    // The verified fact, rendered by application code...
+    expect(shown).toContain("John replied");
+    expect(shown).toContain("this weekend");
+    // ...and the continuation derived from the verified topic and intent.
+    expect(shown).toContain("You're welcome. I hope the visit goes well.");
+    // Nothing else. The closure was surfaced, so it is no longer pending.
+    expect(closure).toBeNull();
+    expect(store.familyClosures).toHaveLength(1);
+  });
+
+  it("what is PERSISTED is exactly what was shown", async () => {
+    /**
+     * A stored message that differs from what the person read is its own kind
+     * of lie: the transcript stops being evidence of the conversation.
+     *
+     * Asserted piece by piece rather than as one string, because the events
+     * and the stored message carry the same two sentences with a different
+     * joiner - the browser renders the closure as its own block, the database
+     * separates them with a blank line. Both must contain exactly these two
+     * sentences and nothing else.
+     */
+    const { events, persisted, services } = await closureTurn();
+
+    const closureEvents = events.filter((e) => e.type === "closure");
+    const deltas = events.filter((e) => e.type === "delta");
+    expect(closureEvents).toHaveLength(1);
+    expect(deltas).toHaveLength(1);
+
+    const sentence = closureEvents[0].type === "closure" ? closureEvents[0].sentence : "";
+    const continuation = deltas[0].type === "delta" ? deltas[0].text : "";
+
+    expect(persisted).toBe(`${sentence}\n\n${continuation}`);
+    // Nothing else crept into the stored message.
+    expect(persisted.trim().endsWith(continuation)).toBe(true);
+    void services;
+  });
+
+  it("the transport shape is unchanged — closure event, delta, state", async () => {
+    const { events } = await closureTurn();
+    const types = events.map((e) => e.type);
+
+    expect(types).toContain("closure");
+    expect(types).toContain("delta");
+    expect(types.at(-1)).toBe("state");
+    // The browser cannot tell that no model ran, which is the point: the
+    // deterministic sentences arrive through the same events as any turn.
+    expect(types).not.toContain("offer");
+  });
+
+  it("the closure is still acknowledged, so it is never told twice", async () => {
+    const { services } = await closureTurn();
+
+    // Surfaced bookkeeping survived the rewrite: a second turn has no news.
+    expect(await loadPendingClosure(services.closure, { userId: USER })).toBeNull();
+  });
+
+  for (const [choiceId, expected] of [
+    ["no", "You're welcome."],
+    ["unsure", "You're welcome."],
+  ] as const) {
+    it(`"${choiceId}" gets a neutral continuation that invents no future`, async () => {
+      const { shown } = await closureTurn(choiceId);
+
+      expect(shown).toContain(expected);
+      // Nothing is wished well, because nothing was agreed to.
+      expect(shown).not.toContain("I hope the visit goes well");
+      expect(shown).not.toContain("I hope the call goes well");
+    });
+  }
 });
