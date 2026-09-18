@@ -1,7 +1,7 @@
 import "server-only";
 import OpenAI from "openai";
 import { transcriptionLanguage, transcriptionModel } from "@/server/config";
-import { errorName, logProviderCall } from "./log";
+import { describeProviderError, errorName, logProviderCall } from "./log";
 import type { SpeechToTextProvider, TranscribeResponse } from "./types";
 
 /**
@@ -32,8 +32,22 @@ export function createOpenAiTranscription(): SpeechToTextProvider {
       const language = transcriptionLanguage();
       const startedAt = Date.now();
 
+      /**
+       * The filename and type the PROVIDER sees, built here rather than taken
+       * from the browser.
+       *
+       * The browser uploads its part as `filename="speech"` with
+       * `audio/webm;codecs=opus`. Neither reaches OpenAI: the route hands over
+       * bytes plus a mime type, `normalizeAudioType` has already stripped the
+       * `;codecs=` parameter, and the name below is constructed with an
+       * extension. OpenAI infers the container from the extension, so a
+       * name with none would be rejected - which is why it has one.
+       */
+      const filename = `speech.${extensionFor(mimeType)}`;
+      const uploadBytes = audio.byteLength;
+
       try {
-        const file = await OpenAI.toFile(Buffer.from(audio), `speech.${extensionFor(mimeType)}`, {
+        const file = await OpenAI.toFile(Buffer.from(audio), filename, {
           type: mimeType,
         });
         const response = await client.audio.transcriptions.create({ file, model, language });
@@ -53,12 +67,25 @@ export function createOpenAiTranscription(): SpeechToTextProvider {
         });
         return { text, model };
       } catch (error) {
+        const upstream = describeProviderError(error);
         logProviderCall({
           event: "voice.transcribe",
           outcome: "request_failed",
           model,
+          language,
           latencyMs: Date.now() - startedAt,
           errorName: errorName(error),
+          // Exactly what the provider rejected, and exactly what we sent it.
+          // Enough to tell a bad key from a bad model from a bad container
+          // without a second deploy.
+          upstreamStatus: upstream.status,
+          upstreamCode: upstream.code,
+          upstreamType: upstream.type,
+          upstreamRequestId: upstream.requestId,
+          upstreamMessage: upstream.message,
+          sentFilename: filename,
+          sentMimeType: mimeType,
+          uploadBytes,
         });
         throw error;
       }

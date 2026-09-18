@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { Button } from "./ui";
 
 /**
@@ -14,9 +14,58 @@ import { Button } from "./ui";
  * It carries no configuration of its own: whether a demo exists at all is a
  * server decision, and this component is simply not rendered otherwise.
  */
+/** After this long, silence stops being reassuring. */
+const STILL_WORKING_MS = 10_000;
+
 export function StartDemo({ action }: { action: () => Promise<{ ok: boolean; reason?: string }> }) {
-  const [pending, startTransition] = useTransition();
+  /**
+   * `starting` is deliberately NOT `useTransition`'s pending flag.
+   *
+   * A transition's pending state is set asynchronously, so three fast clicks
+   * can all pass the check before React has re-rendered once - and each one
+   * would be an anonymous Auth user, against a per-IP sign-in limit. A ref
+   * that is set synchronously inside the handler is the guard; the state is
+   * only what the interface draws.
+   *
+   * On SUCCESS it stays set. The server redirects, so nothing after the call
+   * runs and the navigation is already on its way; returning the button to
+   * "Start" during that would invite a press that creates a second account.
+   */
+  const inFlight = useRef(false);
+  const [starting, setStarting] = useState(false);
+  const [slow, setSlow] = useState(false);
   const [failed, setFailed] = useState(false);
+
+  // Cleared whenever the request settles, so a fast start never shows it.
+  useEffect(() => {
+    if (!starting) return;
+    const timer = setTimeout(() => setSlow(true), STILL_WORKING_MS);
+    return () => clearTimeout(timer);
+  }, [starting]);
+
+  const begin = () => {
+    // Synchronous, before any await: this is the double-click guard.
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setFailed(false);
+    setSlow(false);
+    setStarting(true);
+
+    void (async () => {
+      try {
+        const result = await action();
+        if (result.ok) return; // A redirect is coming. Stay spent.
+        throw new Error(result.reason ?? "failed");
+      } catch {
+        // ONE attempt. A retry here would leave abandoned Auth users behind,
+        // and the reviewer can press again themselves if they want to.
+        inFlight.current = false;
+        setStarting(false);
+        setSlow(false);
+        setFailed(true);
+      }
+    })();
+  };
 
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-md flex-col justify-center px-6">
@@ -26,28 +75,35 @@ export function StartDemo({ action }: { action: () => Promise<{ ok: boolean; rea
       </p>
 
       <div className="pt-7">
+        {/*
+          `pending` is the shared Button's own API: it disables the control and
+          sets aria-busy, so the state is announced rather than only greyed.
+          Passing aria-busy here instead would be silently discarded.
+        */}
         <Button
           type="button"
-          pending={pending}
-          pendingLabel="Starting…"
-          onClick={() =>
-            startTransition(async () => {
-              setFailed(false);
-              // A successful start redirects server-side, so nothing after
-              // this runs. Only a refusal comes back here — and it does not
-              // retry, because a retry loop would leave abandoned accounts
-              // behind.
-              const result = await action();
-              if (!result.ok) setFailed(true);
-            })
-          }
+          onClick={begin}
+          pending={starting}
+          pendingLabel="Creating your CareLoop session…"
         >
           Start CareLoop demo
         </Button>
 
-        <p className="pt-3 text-[0.95rem] text-[var(--color-muted)]">
-          This creates a temporary demo session. No account or email is required.
-        </p>
+        {/*
+          One region, three messages, announced politely rather than
+          interrupting: the reviewer is watching the button, and a screen
+          reader user needs to be told the same thing.
+        */}
+        <div aria-live="polite" className="pt-3 text-[0.95rem] text-[var(--color-muted)]">
+          {starting ? (
+            <>
+              <p>This may take a few seconds.</p>
+              {slow && <p className="pt-1">Still setting things up…</p>}
+            </>
+          ) : (
+            <p>This creates a temporary demo session. No account or email is required.</p>
+          )}
+        </div>
 
         {failed && (
           <p role="alert" className="pt-3 text-[0.95rem] text-[#8a2f2f]">

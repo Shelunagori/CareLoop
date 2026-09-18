@@ -30,6 +30,13 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "missing_audio" }, { status: 400 });
   }
 
+  // What the BROWSER claimed, for the failure log below. The provider never
+  // sees either of these - the adapter builds its own filename and the mime
+  // type is normalized on the way - but knowing what arrived is what settles
+  // "is the upload malformed?" from a log rather than from a guess.
+  const incomingFilename = file instanceof File ? file.name : null;
+  const incomingMimeType = file.type;
+
   // The SERVER decides, from the bytes it actually received. The browser's own
   // duration cap is a courtesy to the person, not a control.
   const result = await transcribeTurn(createTranscriptionDeps(), {
@@ -50,7 +57,15 @@ export async function POST(request: Request) {
     // The provider's message may name a model, a key or a quota. The client
     // gets none of it; the detail stays in the structured provider log.
     console.error(
-      JSON.stringify({ event: "voice.transcribe_failed", errorName: result.errorName }),
+      JSON.stringify({
+        event: "voice.transcribe_failed",
+        errorName: result.errorName,
+        // Shape of the upload, never its contents. The provider's own status,
+        // code and request id are on the adapter's `voice.transcribe` line.
+        incomingFilename,
+        incomingMimeType,
+        uploadBytes: file.size,
+      }),
     );
     return NextResponse.json({ error: "transcription_failed" }, { status: 502 });
   }

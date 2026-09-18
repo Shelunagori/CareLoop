@@ -268,6 +268,29 @@ describe("4. voice decides nothing", () => {
     expect(source).toContain("transcriptLength: text.length");
   });
 
+  it("an upload SIZE is diagnosable on failure, and invisible on success", () => {
+    /**
+     * A byte count is not content, but it is close to a duration - and this
+     * adapter's comment deliberately excluded durations because they let one
+     * utterance be told from another. Debugging the production 502 needs it
+     * (an empty upload and a real one have to be distinguishable from a log),
+     * so the compromise is asymmetric: a FAILED call records the size, a
+     * SUCCESSFUL one records nothing about the recording at all.
+     */
+    const source = code("server/adapters/openai/transcription.ts");
+    const records = [...source.matchAll(/logProviderCall\(\{([\s\S]*?)\}\);/g)].map(
+      (match) => match[1],
+    );
+
+    const succeeded = records.filter((record) => record.includes('outcome: "ok"'));
+    const failed = records.filter((record) => record.includes('outcome: "request_failed"'));
+    expect(succeeded).toHaveLength(1);
+    expect(failed).toHaveLength(1);
+
+    expect(succeeded[0], "a successful call fingerprinted the recording").not.toContain("uploadBytes");
+    expect(failed[0]).toContain("uploadBytes");
+  });
+
   it("speech synthesis is optional — its absence is configuration, not failure", async () => {
     const { isSpeechSynthesisConfigured } = await import("@/server/config");
     expect(isSpeechSynthesisConfigured({})).toBe(false);

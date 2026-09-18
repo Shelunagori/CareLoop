@@ -7,6 +7,7 @@ import { authorizeDemoReset, authorizeDemoStart } from "@/server/auth/demo-acces
 import { isDemoModeEnabled } from "@/server/config";
 import { createDemoFixtureDeps, createFamilyContactDeps } from "@/server/services/deps";
 import { readDemoEmail } from "@/core/family/demo-email";
+import { startTimer } from "@/server/observability/timing";
 import { familyConfig } from "@/server/config";
 import { fixtureUuid } from "@/server/services/demo-fixture";
 import {
@@ -60,10 +61,22 @@ export async function startDemoAction(): Promise<{ ok: boolean; reason?: string 
   // fixture is written over whatever is already there.
   if (decision.action === "reuse") redirect("/");
 
+  // Instrumented because the live flow is slow and the cause is not guessable
+  // from the outside: every step below is a separate HTTPS round-trip from the
+  // function to Supabase, and which one dominates depends on region distance.
+  // Step names and milliseconds only - no user id, no address, no content.
+  const timer = startTimer();
+  timer.mark("authorize");
+
   const supabase = await createRequestAuthClient();
+  timer.mark("auth_client");
+
   const { data, error } = await supabase.auth.signInAnonymously();
+  timer.mark("sign_in");
+
   const userId = data?.user?.id;
   if (error || !userId) {
+    timer.done("demo.start_timing", { outcome: "sign_in_failed" });
     // One attempt. A retry loop here would turn a provider hiccup into a
     // stream of abandoned accounts.
     console.error(
@@ -78,9 +91,19 @@ export async function startDemoAction(): Promise<{ ok: boolean; reason?: string 
   // Their own George. Every fixture id is derived from this UUID, so two
   // reviewers seeded from the same spec share no rows at all.
   const deps = createDemoFixtureDeps();
-  await seedDemoFixture(deps, { userId, spec: DEMO_GEORGE });
-  await ensureBlankConversation(deps, { userId });
+  timer.mark("deps");
 
+  await seedDemoFixture(deps, { userId, spec: DEMO_GEORGE });
+  timer.mark("seed_fixture");
+
+  await ensureBlankConversation(deps, { userId });
+  timer.mark("blank_conversation");
+
+  timer.done("demo.start_timing", { outcome: "created" });
+
+  // NOTE: `redirect` throws, so nothing after it runs - the timing line is
+  // emitted first, on purpose. The render that follows the redirect is a
+  // separate request and is timed by the page.
   redirect("/");
 }
 
@@ -101,6 +124,7 @@ export async function resetDemoSessionAction(): Promise<{ ok: boolean; reason?: 
   if (!decision.allowed) return { ok: false, reason: decision.reason };
 
   const { userId } = decision;
+  const timer = startTimer();
 
   // Read BEFORE the reset. The reset deletes the fixture's John, and the
   // family_contacts row cascades with it - so a reviewer who restarted would
@@ -109,14 +133,23 @@ export async function resetDemoSessionAction(): Promise<{ ok: boolean; reason?: 
   // because every one of those three is keyed by this user id.
   const email = await readDemoContactAddress(userId);
 
+  timer.mark("read_contact");
+
   const deps = createDemoFixtureDeps();
   await resetDemoFixture(deps, { userId, spec: DEMO_GEORGE });
+  timer.mark("reset_fixture");
+
   await seedDemoFixture(deps, { userId, spec: DEMO_GEORGE });
+  timer.mark("seed_fixture");
+
   await ensureBlankConversation(deps, { userId });
+  timer.mark("blank_conversation");
 
   // Re-bound to the NEW row, which the derivation guarantees has the same id.
   if (email) await saveDemoEmail(userId, email);
+  timer.mark("restore_contact");
 
+  timer.done("demo.restart_timing");
   return { ok: true };
 }
 
