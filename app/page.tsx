@@ -3,15 +3,26 @@ import { DemoResetButton } from "@/app/_components/dev-tools";
 import { DemoHint } from "@/app/_components/dev-hint";
 import { FamilyInboxLink } from "@/app/_components/dev-operator";
 import { resetDemoAction } from "@/app/_actions/demo";
-import { getCurrentUserId } from "@/server/auth/current-user";
-import { isDebugSurfaceEnabled } from "@/server/config";
+import { resetDemoSessionAction, startDemoAction } from "@/app/_actions/demo-session";
+import { DemoRestartButton, StartDemo } from "@/app/_components/demo-start";
+import { getCurrentIdentity } from "@/server/auth/current-user";
+import { isDebugSurfaceEnabled, isDemoModeEnabled } from "@/server/config";
 import { loadConversationView } from "@/server/services/conversation";
 import { createConversationDataDeps } from "@/server/services/deps";
 
 export const dynamic = "force-dynamic";
 
 export default async function Page() {
-  const userId = await getCurrentUserId();
+  const identity = await getCurrentIdentity();
+  const userId = identity.userId;
+  // Decided on the SERVER, once. The browser is never told whether a demo
+  // exists; it is simply shown one or not.
+  const demoMode = isDemoModeEnabled(process.env);
+
+  // A public demo with nobody signed in: offer the door, do not open it.
+  // Creating the account here would mean every crawler and link preview mints
+  // a Supabase user.
+  if (!userId && demoMode) return <StartDemo action={startDemoAction} />;
 
   if (!userId) {
     return (
@@ -45,6 +56,10 @@ export default async function Page() {
   // Development only, and decided on the SERVER. In production neither the
   // control nor the hint is rendered, and neither reaches the client bundle.
   const isDev = isDebugSurfaceEnabled(process.env);
+  // A reviewer may restart their OWN demo. Distinct from the developer reset
+  // above in wording and in authorization, and offered only to the anonymous
+  // account that owns the data it would restore.
+  const canRestartDemo = demoMode && identity.isAnonymous;
 
   return (
     <Chat
@@ -58,6 +73,8 @@ export default async function Page() {
             <FamilyInboxLink />
             <DemoResetButton action={resetDemoAction} />
           </div>
+        ) : canRestartDemo ? (
+          <DemoRestartButton action={resetDemoSessionAction} />
         ) : null
       }
       demoHint={isDev ? <DemoHint /> : null}

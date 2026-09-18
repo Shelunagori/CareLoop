@@ -242,12 +242,74 @@ export const detectionSweepConfig = {
 } as const;
 
 /**
- * M5 family loop. The base URL is where the capability link points; it must be
- * reachable by the family member, which localhost is not once this is
- * deployed, so it is configuration rather than a derived value.
+ * Is this deployment a public demo?
+ *
+ * An ALLOW-LIST on one exact string, for the same reason every other gate in
+ * this file is one. This flag decides whether a stranger can create an account
+ * and be handed a seeded product, so "anything that is not obviously off"
+ * would be exactly the wrong default: an unset, misspelled or inherited value
+ * must mean no. `CARELOOP_DEMO_MODE` is the only cause - not NODE_ENV, not the
+ * absence of a session, not being deployed.
+ */
+export function isDemoModeEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.CARELOOP_DEMO_MODE === "true";
+}
+
+export class InvalidPublicBaseUrlError extends Error {
+  readonly name = "InvalidPublicBaseUrlError";
+  constructor(problem: string) {
+    // The value is deliberately NOT interpolated. This message reaches logs,
+    // and a misconfigured base URL is often a half-pasted deploy URL.
+    super(`CARELOOP_PUBLIC_BASE_URL ${problem}. See .env.example.`);
+  }
+}
+
+/** Local development is the only place a default is acceptable. */
+function isDeployment(env: NodeJS.ProcessEnv): boolean {
+  return env.NODE_ENV !== "development" || Boolean(env.VERCEL);
+}
+
+const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]", "::1", "0.0.0.0"]);
+
+/**
+ * M5 family loop. The base URL is where the capability link points.
+ *
+ * It is CONFIGURATION, never derived from the request. Taking it from the Host
+ * header would let whoever sends a request decide where a family member's
+ * capability link points, which is how a capability URL ends up on somebody
+ * else's domain.
+ *
+ * It used to default to localhost everywhere, which read as harmless and was
+ * not: on a deployment that default silently mints links to the recipient's
+ * own machine. Every family message would have been undeliverable in a way
+ * nothing reported, because the link is only followed by someone who is not
+ * looking at our logs. So a deployment must be told, and is checked:
+ * absolute, https (the link IS the credential), not loopback, and no trailing
+ * slash - `familyRespondUrl` concatenates onto this, and one slash is the
+ * difference between a working link and a 404 for the one person the whole
+ * feature exists for.
  */
 export function publicBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
-  return env.CARELOOP_PUBLIC_BASE_URL ?? "http://localhost:3000";
+  const configured = env.CARELOOP_PUBLIC_BASE_URL?.trim();
+
+  if (!isDeployment(env)) return configured || "http://localhost:3000";
+
+  if (!configured) throw new InvalidPublicBaseUrlError("is required on a deployment");
+
+  let url: URL;
+  try {
+    url = new URL(configured);
+  } catch {
+    throw new InvalidPublicBaseUrlError("must be an absolute URL");
+  }
+
+  if (url.protocol !== "https:") throw new InvalidPublicBaseUrlError("must use https on a deployment");
+  if (!url.hostname) throw new InvalidPublicBaseUrlError("must have a host");
+  if (LOOPBACK.has(url.hostname.toLowerCase())) {
+    throw new InvalidPublicBaseUrlError("must not point at localhost on a deployment");
+  }
+
+  return `${url.origin}${url.pathname}`.replace(/\/+$/, "");
 }
 
 export const familyConfig = {

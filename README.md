@@ -214,6 +214,33 @@ mutation testing: behaviour is only considered pinned once deliberately
 breaking it turns something red, and surviving mutants are treated as test
 gaps, not as noise.
 
+## The public demo
+
+`CARELOOP_DEMO_MODE=true` turns a deployment into a demo anyone can open. A
+visitor presses **Start CareLoop demo**, and one Supabase **anonymous** user is
+created for them, seeded with their own George fixture.
+
+Anonymous does not mean unauthenticated. The browser holds a real validated
+Supabase session with its own UUID and the ordinary `authenticated` role; it
+simply has no email or password attached. Every product row is keyed by that
+UUID exactly as a permanent account's would be, and the fixture derives every
+id from it (`fixtureUuid(fixtureId, userId, key)`) — so two reviewers hold the
+same cast and share no row. A reviewer can **Restart demo** to reset their own
+world, and only their own: the action re-checks demo mode, a real session, and
+the trusted `is_anonymous` claim before it touches anything.
+
+The account is created only by that click. Nothing on a page render signs
+anyone in — a crawler or link preview would otherwise mint Auth users, and
+Supabase rate-limits anonymous sign-in per IP (30/hour by default). Before
+advertising the URL more widely, enable CAPTCHA (invisible hCaptcha or
+Turnstile) on the project's Auth settings and review that limit. Expired or
+cleared sessions simply start a new demo, so abandoned anonymous users
+accumulate; that is accepted for a shared review link and is not cleaned up
+automatically.
+
+Development is unchanged: `CARELOOP_DEV_USER_ID` still works locally and is
+still refused on any deployment.
+
 ## Dev surfaces
 
 Behind a strict four-condition gate — `NODE_ENV === "development"`, not a
