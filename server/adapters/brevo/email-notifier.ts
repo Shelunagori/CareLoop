@@ -88,7 +88,9 @@ export function createBrevoEmailNotifier(env: BrevoEnv = process.env): Notifier 
         // HTML; it does not touch the text.
         body: message.body,
         responseUrl: message.responseUrl,
-        fromDisplayName: message.recipientDisplayName ?? "CareLoop",
+        // The SENDER. This read `recipientDisplayName` and put the recipient's
+        // own name in the From line - John received "A message from John".
+        fromDisplayName: message.senderDisplayName,
       });
 
       const response = await post(apiKey, {

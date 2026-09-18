@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NotifierMessage } from "@/server/adapters/notifier";
 
@@ -23,6 +24,7 @@ const MESSAGE: NotifierMessage = {
   channel: "email",
   address: "john@example.test",
   recipientDisplayName: "John",
+  senderDisplayName: "Dad",
   body: BODY,
   responseUrl: "https://careloop.example.test/family/respond/TOKEN-abc",
 };
@@ -170,7 +172,11 @@ describe("1. the request Brevo receives", () => {
 
     expect(String(payload.textContent)).toContain(BODY);
     expect(String(payload.htmlContent)).toContain(MESSAGE.responseUrl);
-    expect(payload.subject).toBe("A message from John via CareLoop");
+    // This line read "A message from John via CareLoop" - the recipient's own
+    // name - and passed, because the adapter and the test made the same
+    // mistake. A fixture where sender and recipient are the same person would
+    // have hidden it for good; they are deliberately different here.
+    expect(payload.subject).toBe("A message from Dad via CareLoop");
   });
 
   it("sends no transcript, payload metadata or analytics tags", async () => {
@@ -305,6 +311,82 @@ describe("4. it refuses to exist unconfigured", () => {
     } catch (error) {
       expect((error as Error).message).toContain("BREVO_API_KEY");
       expect((error as Error).message).not.toContain(ENV.BREVO_SENDER_EMAIL!);
+    }
+  });
+});
+
+describe("sender and recipient are different people", () => {
+  /**
+   * THE BUG THIS FIXES. Every delivered email said "A message from John via
+   * CareLoop" - addressed to John, from John.
+   *
+   * The Notifier port carried only `recipientDisplayName`, so the adapter had
+   * literally nothing else to put in the From line. Nothing caught it because
+   * both names are strings, either renders into a grammatical sentence, and
+   * the fixture the adapter was tested against had only one person in it.
+   *
+   * These assert the two identities land in different places, and the swap
+   * test below is what makes that a real claim rather than a coincidence.
+   */
+  it("the SENDER names the subject and the body heading", async () => {
+    const calls = stubFetch(ok());
+    await (await notifier()).send(MESSAGE);
+    const payload = body(calls[0]);
+
+    expect(payload.subject).toBe("A message from Dad via CareLoop");
+    expect(String(payload.htmlContent)).toContain("A message from <strong");
+    expect(String(payload.htmlContent)).toContain(">Dad</strong>");
+    expect(String(payload.textContent)).toContain("A message from Dad");
+  });
+
+  it("the RECIPIENT names the addressee, and appears nowhere as the sender", async () => {
+    const calls = stubFetch(ok());
+    await (await notifier()).send(MESSAGE);
+    const payload = body(calls[0]);
+    const to = (payload.to as Array<{ email: string; name?: string }>)[0];
+
+    expect(to.email).toBe("john@example.test");
+    expect(to.name).toBe("John");
+
+    // The recipient's name must not appear in any From position.
+    expect(payload.subject).not.toContain("John");
+    expect(String(payload.htmlContent)).not.toContain("A message from <strong style=\"color:#1f1b16\">John");
+    expect(String(payload.textContent)).not.toContain("A message from John");
+  });
+
+  it("SWAPPING them fails — the two are not interchangeable", async () => {
+    // The mutation, written as a test: if the adapter ever reads the wrong
+    // field again, this is the shape of what it produces.
+    const calls = stubFetch(ok());
+    await (await notifier()).send({
+      ...MESSAGE,
+      senderDisplayName: "John",
+      recipientDisplayName: "Dad",
+    });
+    const payload = body(calls[0]);
+
+    expect(payload.subject).toBe("A message from John via CareLoop");
+    expect(payload.subject).not.toBe("A message from Dad via CareLoop");
+    expect((payload.to as Array<{ name?: string }>)[0].name).toBe("Dad");
+  });
+
+  it("no fixture name is baked into the adapter", async () => {
+    // "Dad" and "John" are demo fixtures. A real deployment has other names,
+    // and the adapter must carry whatever it is handed.
+    const calls = stubFetch(ok());
+    await (await notifier()).send({
+      ...MESSAGE,
+      senderDisplayName: "Margaret",
+      recipientDisplayName: "Priya",
+    });
+    const payload = body(calls[0]);
+
+    expect(payload.subject).toBe("A message from Margaret via CareLoop");
+    expect((payload.to as Array<{ name?: string }>)[0].name).toBe("Priya");
+
+    const source = readFileSync("server/adapters/brevo/email-notifier.ts", "utf8");
+    for (const fixture of ["Dad", "John", "George", "Simba"]) {
+      expect(source, fixture).not.toContain(`"${fixture}"`);
     }
   });
 });

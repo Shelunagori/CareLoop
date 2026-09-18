@@ -574,8 +574,30 @@ describe("6. privacy: the family side sees one sentence and nothing else", () =>
     await sendApprovedOpportunity(d.send, { userId: USER, opportunityId: "opp-1" });
 
     expect(Object.keys(store.delivered[0]).sort()).toEqual([
-      "address", "body", "channel", "recipientDisplayName", "requestId", "responseUrl",
+      "address",
+      "body",
+      "channel",
+      "recipientDisplayName",
+      "requestId",
+      "responseUrl",
+      "senderDisplayName",
     ]);
+
+    /**
+     * The two names are DIFFERENT PEOPLE, and the delivered email said so
+     * wrongly for as long as only one of them was carried: the Brevo adapter
+     * had nothing but `recipientDisplayName`, so John received "A message
+     * from John".
+     */
+    expect(store.delivered[0].senderDisplayName).toBe("Dad");
+    expect(store.delivered[0].recipientDisplayName).toBe("John");
+    expect(store.delivered[0].senderDisplayName).not.toBe(
+      store.delivered[0].recipientDisplayName,
+    );
+
+    // And the sender is a NAME, not a route back into the payload: no topic,
+    // no question, no transcript arrives with it.
+    expect(typeof store.delivered[0].senderDisplayName).toBe("string");
   });
 });
 

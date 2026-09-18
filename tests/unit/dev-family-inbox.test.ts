@@ -136,6 +136,7 @@ describe("4. a reset starts the family side clean too", () => {
       channel: "sms",
       address: "+15550000",
       recipientDisplayName: "A",
+      senderDisplayName: "Dad",
       body: "Are you able to visit soon?",
       responseUrl: "http://localhost:3000/family/respond/plaintext-token",
     });

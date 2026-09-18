@@ -17,6 +17,7 @@ import {
   mintFamilyToken,
   tokenHashPrefix,
 } from "@/core/family/token";
+import { SharePayloadSchema } from "@/core/share/payload";
 import { sha256Hex } from "@/core/share/text-hash";
 import { isTokenExpired } from "@/core/family/token";
 
@@ -425,6 +426,17 @@ async function rotateForRetry(
  * opportunity stays consumed, the request stays `pending` and retryable. The
  * older adult is not asked again, because they already answered.
  */
+/**
+ * The stored payload could not be read, so we cannot say who the message is
+ * from. Named so `lastDeliveryError` and the delivery log identify it.
+ */
+class UnreadableSharePayloadError extends Error {
+  readonly name = "UnreadableSharePayloadError";
+  constructor() {
+    super("The stored share payload could not be read, so the sender is unknown.");
+  }
+}
+
 async function deliver(
   deps: FamilySendDeps,
   input: {
@@ -438,6 +450,21 @@ async function deliver(
   const startedAt = Date.now();
 
   try {
+    /**
+     * WHO THE MESSAGE IS FROM, read from the approved payload.
+     *
+     * The same field, from the same stored payload, that the family response
+     * page renders as "A message from Dad" - so the email and the page cannot
+     * drift apart, and neither can be corrected without the other.
+     *
+     * Parsed inside the try on purpose. A payload that will not parse is data
+     * corruption, and the right answer is a retryable delivery failure, not an
+     * email that claims to be from a name we had to invent. Nothing goes out
+     * signed by a guess.
+     */
+    const payload = SharePayloadSchema.safeParse(request.payload);
+    if (!payload.success) throw new UnreadableSharePayloadError();
+
     await deps.notifier.send({
       // The request id IS the idempotency key. For a provider that supports
       // one, this is the value to pass; for a provider that does not,
@@ -446,7 +473,9 @@ async function deliver(
       requestId: request.id,
       channel: contact.channel,
       address: contact.address,
+      // Two DIFFERENT people. John receives it; Dad sent it.
       recipientDisplayName: contact.displayName,
+      senderDisplayName: payload.data.fromDisplayName,
       body: request.renderedBody,
       responseUrl: familyRespondUrl(input.tokenPlaintext),
     });

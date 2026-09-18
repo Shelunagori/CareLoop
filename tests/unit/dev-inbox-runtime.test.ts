@@ -32,6 +32,7 @@ const message = (requestId: string, body: string) => ({
   channel: "sms",
   address: "+15550000",
   recipientDisplayName: "John",
+  senderDisplayName: "Dad",
   body,
   responseUrl: `http://localhost:3000/family/respond/token-${requestId}`,
 });

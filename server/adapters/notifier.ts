@@ -16,7 +16,26 @@ export type NotifierMessage = {
   requestId: string;
   channel: string;
   address: string;
+  /**
+   * WHO IT IS FOR. The family contact - John.
+   *
+   * Distinct from `senderDisplayName` below, and the distinction is the whole
+   * reason both exist. This port used to carry only this one, so the email
+   * adapter had nothing else to address the message FROM and used the
+   * recipient: every delivered email said "A message from John" to John.
+   * Nothing caught it because both names are strings and either one renders
+   * into a grammatical sentence.
+   */
   recipientDisplayName: string | null;
+  /**
+   * WHO IT IS FROM. The older adult - Dad.
+   *
+   * Required rather than nullable: an email that cannot say who it is from has
+   * no business being sent, and a default here is how the wrong name gets in
+   * again. It comes from the approved SharePayload, the same field the family
+   * response page renders, so the email and the page cannot disagree.
+   */
+  senderDisplayName: string;
   /** EXACTLY the approved bytes. */
   body: string;
   /** The capability URL. Contains the plaintext token; never logged. */
