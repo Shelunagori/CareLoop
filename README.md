@@ -8,6 +8,9 @@ The governing invariant, in one line:
 
 > **The LLM is a sensor and a renderer; it is never the decision-maker.**
 
+Live demo: <https://care-loop-lac.vercel.app> — each visitor gets their own
+anonymous session and their own seeded world; see [The public demo](#the-public-demo).
+
 Every decision that matters — whether a pattern counts as a change, whether an
 opportunity may be offered, whether consent was given, whether a message may be
 sent — is made by pure deterministic code in `core/` or by a conditional SQL
@@ -29,6 +32,10 @@ anything structural.
 | M6 | Deterministic demo fixture (George / John / Simba) | Complete |
 | M7 | Demo UX, accessibility and product polish | Complete |
 | M8 | Push-to-talk voice | Live-accepted |
+| M9 | Production demo readiness audit | Complete |
+| M10 | Anonymous per-visitor public demo identity | Complete |
+| M11 | Production family email delivery (Brevo) | Complete |
+| Hardening | Cloudflare Workers AI migration; verified family-response grounding | Complete |
 
 ## What it does
 
@@ -161,6 +168,23 @@ a year later. Four general correctness fixes it surfaced were kept: the consent
 qualifier rule, the pinned transcription language, empty-transcript safety, and
 the distinction between "I didn't catch that" and "that recording failed".
 
+### A family reply is an external-world fact
+
+Whether somebody replied is not something the companion can work out, and it is
+not something it is allowed to decide. The application checks, and the
+application says.
+
+Before a real response exists, the turn carries deterministic state saying a
+message was sent and no reply has been recorded, and CareLoop may say exactly
+that. After one exists, the closure is built from persisted rows — response,
+closure, rendered sentence — and the **conversational model is not called at
+all** on that turn: both the sentence stating the reply and the short
+continuation after it come from application code.
+
+That is stronger than instructing the model not to invent one. An instruction
+is a probability, and being told your family got in touch when they did not is
+not a thing to leave to probability.
+
 ### The card is the server's word, not the model's
 
 A reconnect offer reaches the browser as FIELDS — recipient, exact stored
@@ -177,9 +201,30 @@ Requires **Node 22 or newer** (`engines.node`, `.nvmrc`).
 
 ```bash
 npm install
-cp .env.example .env.local     # fill in Supabase and OpenAI values
+cp .env.example .env.local     # then fill it in — see below
 npm run dev
 ```
+
+`.env.example` documents every variable and is placeholders only. What each
+group is for:
+
+| Group | Needed for | Required |
+|---|---|---|
+| Supabase | database, auth, RLS | yes |
+| Cloudflare Workers AI | conversation, extraction, embeddings, transcription, family rendering | yes |
+| Brevo | family email delivery on a deployment or the public demo | for delivery |
+| ElevenLabs | reading replies aloud | no |
+
+**Cloudflare Workers AI is the active provider for every AI path.** One account
+id and one API token cover all five; the model ids default and need setting
+only to pin something else.
+
+ElevenLabs is genuinely optional: without it CareLoop is fully usable by typing
+and by speaking, and only the speak-aloud endpoint answers a clean 503.
+
+The `OPENAI_*` variables in `.env.example` are **dormant** — kept for
+rollback compatibility with the previous deployed revision, not read by any
+active path. Local development needs none of them.
 
 ## Database
 

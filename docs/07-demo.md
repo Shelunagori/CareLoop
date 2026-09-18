@@ -92,11 +92,34 @@ development it is a 404, and nothing about it reaches a production bundle.
 > host. That is a door against casual reachability from the same network — it
 > is not authentication, and the page says so in its own header comment.
 
-> *"A real deployment swaps one adapter: the Notifier port takes a recipient, a
-> body and a link, and a Twilio or SendGrid implementation satisfies it in a
-> few lines. Nothing in consent, authorization, delivery or response semantics
-> changes — the family member still holds a capability URL, and the response
-> route is the same one either way."*
+> *"The Notifier port takes a recipient, a body and a link — and that swap has
+> already happened. A deployment delivers through Brevo transactional email;
+> local development uses the inbox above. Nothing in consent, authorization,
+> delivery or response semantics differs between them: the family member holds
+> the same capability URL and answers through the same route either way."*
+
+The two paths, side by side:
+
+| | Local development | Deployment / public demo |
+|---|---|---|
+| Transport | development inbox (`/dev/family-inbox`) | Brevo transactional email |
+| Where the link lands | Tab B, in the browser | the contact's inbox |
+| Reachable in production | no — 404, and absent from the bundle | yes |
+
+The deployed path end to end:
+
+```
+CareLoop  →  authorized family request  →  Brevo transactional email
+          →  capability response page   →  persisted family response
+          →  deterministic closure
+```
+
+> A 201 from Brevo means **the transport accepted the message** — not that it
+> was delivered, arrived, escaped a spam filter or was read. CareLoop's
+> `delivered` status has always meant "handed to the transport", and the email
+> path does not change that. Opens and clicks are not measured: tracking is
+> declined per recipient, because click tracking rewrites links, and the link
+> here is a live capability token.
 
 ---
 
@@ -242,6 +265,16 @@ John replied that they are planning to visit this weekend.
 > phone-call request renders as a call. And it's a persisted closure, not
 > something the model was asked to remember: CareLoop promised George it would
 > ask John, so keeping that promise is a row you can query for."*
+
+> *"The sentence after it is deterministic too. On a turn that surfaces a
+> verified reply the conversational model is not called at all — not to write
+> the update, and not to write the warmth that follows it. Whether somebody
+> replied is a fact about the outside world, and the model has no authority
+> over the wording that states it or sits beside it."*
+
+Before a real response exists, the same question gets the honest answer rather
+than a guess: the turn carries application state saying a message was sent and
+no reply has been recorded, and CareLoop says so.
 
 ---
 
