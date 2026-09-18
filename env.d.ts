@@ -37,6 +37,8 @@ declare namespace NodeJS {
     CLOUDFLARE_ACCOUNT_ID?: string;
     CLOUDFLARE_API_TOKEN?: string;
     CLOUDFLARE_TRANSCRIPTION_MODEL?: string;
+    CLOUDFLARE_TEXT_MODEL?: string;
+    CLOUDFLARE_EMBEDDING_MODEL?: string;
     CARELOOP_TRANSCRIPTION_LANGUAGE?: string;
 
     BREVO_API_KEY?: string;

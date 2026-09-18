@@ -6,9 +6,9 @@ import { createElevenLabsVoice } from "@/server/adapters/elevenlabs/voice";
 import type { SynthesisDeps, TranscriptionDeps } from "@/server/services/voice";
 import type { SpeakableDeps } from "@/server/services/speakable";
 import type { DemoFixtureDeps } from "@/server/services/demo-fixture";
-import { createOpenAiEmbeddings } from "@/server/adapters/openai/embeddings";
-import { createOpenAiExtraction } from "@/server/adapters/openai/extraction";
-import { createOpenAiLlm } from "@/server/adapters/openai/llm";
+import { createCloudflareEmbeddings } from "@/server/adapters/cloudflare/embeddings";
+import { createCloudflareExtraction } from "@/server/adapters/cloudflare/extraction";
+import { createCloudflareLlm } from "@/server/adapters/cloudflare/llm";
 import { createServiceRoleClient } from "@/server/db/client";
 import { conversationsRepo } from "@/server/repositories/conversations";
 import { entitiesRepo } from "@/server/repositories/entities";
@@ -24,7 +24,7 @@ import { signalsRepo } from "@/server/repositories/signals";
 import { opportunitiesRepo } from "@/server/repositories/opportunities";
 import { profilesRepo } from "@/server/repositories/profiles";
 import { familyRequestsRepo } from "@/server/repositories/family-requests";
-import { createOpenAiFamilyRender } from "@/server/adapters/openai/family-render";
+import { createCloudflareFamilyRender } from "@/server/adapters/cloudflare/family-render";
 import { consentGrantsRepo } from "@/server/repositories/consent-grants";
 import { familyContactsRepo } from "@/server/repositories/family-contacts";
 import { familyResponsesRepo } from "@/server/repositories/family-responses";
@@ -68,14 +68,14 @@ export function createConversationDeps(): ConversationDeps {
     relationships: relationshipsRepo(db),
     facts: factsRepo(db),
     episodes: episodesRepo(db),
-    embeddings: createOpenAiEmbeddings(),
+    embeddings: createCloudflareEmbeddings(),
   };
 
   return {
     conversations: conversationsRepo(db),
     messages: messagesRepo(db),
     jobs: jobsRepo(db),
-    llm: createOpenAiLlm(),
+    llm: createCloudflareLlm(),
     memory: (input) =>
       loadMemoryForTurn(retrieval, { ...input, now: systemClock.now() }),
     // M5. The hot path gets four small functions, not the family loop's
@@ -241,8 +241,8 @@ export function createIngestionDeps(): IngestionDeps {
     messages: messagesRepo(db),
     interactionEvents: interactionEventsRepo(db),
     baselines: baselinesRepo(db),
-    extraction: createOpenAiExtraction(),
-    embeddings: createOpenAiEmbeddings(),
+    extraction: createCloudflareExtraction(),
+    embeddings: createCloudflareEmbeddings(),
     clock: systemClock,
   };
 }
@@ -352,7 +352,7 @@ export function createReconnectDeps(): ReconnectDeps {
     profiles: profilesRepo(db),
     familyRequests: familyRequestsRepo(db),
     conversations: conversationsRepo(db),
-    familyRender: createOpenAiFamilyRender(),
+    familyRender: createCloudflareFamilyRender(),
   };
 }
 

@@ -110,7 +110,7 @@ describe("Cloudflare Workers AI transcription — configuration", () => {
       expect(calls, "a request was sent without a credential").toHaveLength(0);
       expect(outcome).toEqual({
         outcome: "provider_failed",
-        errorName: "CloudflareTranscriptionNotConfiguredError",
+        errorName: "CloudflareNotConfiguredError",
       });
       // Diagnosable: the log says which variable, so the fix is one line.
       const line = JSON.parse(logs.at(-1) as string) as Record<string, unknown>;

@@ -183,7 +183,20 @@ describe("1. optional speech never breaks CareLoop", () => {
     };
     delete process.env.ELEVENLABS_API_KEY;
     delete process.env.ELEVENLABS_VOICE_ID;
-    process.env.OPENAI_API_KEY ??= "test-openai-key";
+    /**
+     * OPENAI_API_KEY is DELETED, not supplied.
+     *
+     * It used to be set here - `??= "test-openai-key"` - which made the
+     * assertion below read as "the app constructs without credentials" while
+     * actually proving the opposite: every OpenAI adapter threw at
+     * construction for want of that key, and this line handed it to them. The
+     * test passed because the credential was present.
+     *
+     * Now that every active provider is Cloudflare, deleting it is the real
+     * assertion, and tests/unit/no-openai.test.ts takes it further by proving
+     * no request goes to api.openai.com either.
+     */
+    delete process.env.OPENAI_API_KEY;
     process.env.NEXT_PUBLIC_SUPABASE_URL ??= "http://localhost:54321";
     process.env.SUPABASE_SERVICE_ROLE_KEY ??= "test-service-role-key";
     try {

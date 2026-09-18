@@ -15,7 +15,11 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:llm-contract": "vitest run --config vitest.contract.config.mts",
-    "test:ui": "vitest run --project ui"
+    "test:ui": "vitest run --project ui",
+    "reembed": "node --conditions=react-server --env-file-if-exists=.env.local --import tsx scripts/reembed.ts",
+    "reembed:dry": "node --conditions=react-server --env-file-if-exists=.env.local --import tsx scripts/reembed.ts --dry-run",
+    "reembed:status": "node --conditions=react-server --env-file-if-exists=.env.local --import tsx scripts/reembed.ts --status",
+    "cloudflare:smoke": "node --conditions=react-server --env-file-if-exists=.env.local --import tsx scripts/cloudflare-smoke.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.7",
@@ -43,6 +47,7 @@
     "jsdom": "^26.1.0",
     "supabase": "^2.117.0",
     "tailwindcss": "^4",
+    "tsx": "^4.23.13",
     "typescript": "^5",
     "vitest": "^5.0.1"
   },

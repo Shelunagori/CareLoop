@@ -226,6 +226,66 @@ export function isLocalOperatorHost(input: {
  * gives automatic detection almost nothing to go on, and a live "yes" once
  * came back as a Chinese character.
  */
+export type CloudflareCredentials = {
+  accountId: string;
+  apiToken: string;
+};
+
+/**
+ * The one credential pair every Cloudflare adapter shares.
+ *
+ * Throws by NAME when a variable is missing. Callers read this per request,
+ * not at construction, so the throw lands inside the caller's own failure
+ * handling instead of escaping a composition root as an unhandled 500.
+ */
+export function cloudflareCredentials(env: NodeJS.ProcessEnv = process.env): CloudflareCredentials {
+  return {
+    accountId: requiredCloudflare(env, "CLOUDFLARE_ACCOUNT_ID"),
+    apiToken: requiredCloudflare(env, "CLOUDFLARE_API_TOKEN"),
+  };
+}
+
+export const DEFAULT_CLOUDFLARE_TEXT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+export const DEFAULT_CLOUDFLARE_EMBEDDING_MODEL = "@cf/baai/bge-m3";
+
+/** Chat, family rendering and extraction all run on one text model. */
+export function cloudflareTextModel(env: NodeJS.ProcessEnv = process.env): string {
+  return env.CLOUDFLARE_TEXT_MODEL?.trim() || DEFAULT_CLOUDFLARE_TEXT_MODEL;
+}
+
+export function cloudflareEmbeddingModel(env: NodeJS.ProcessEnv = process.env): string {
+  return env.CLOUDFLARE_EMBEDDING_MODEL?.trim() || DEFAULT_CLOUDFLARE_EMBEDDING_MODEL;
+}
+
+/**
+ * Output ceilings, per call site.
+ *
+ * Workers AI defaults `max_tokens` to 256, which is short enough to cut George
+ * off mid-sentence and short enough to truncate an extraction's JSON into
+ * something unparseable. Each number below is the job's own ceiling, not one
+ * shared guess: a spoken reply is short by design, a family message is one
+ * sentence with room to breathe, and a structured extraction is the only one
+ * that can legitimately run long.
+ */
+export const cloudflareOutputLimits = {
+  chat: 512,
+  familyRender: 1024,
+  extraction: 2048,
+} as const;
+
+/**
+ * The input side of the same window.
+ *
+ * The text model's context is 24k tokens, shared between input, output and
+ * protocol overhead. 18k leaves room for the largest output ceiling above
+ * plus the system prompt, with headroom for the estimate itself being
+ * approximate. This is a BACKSTOP: what normally keeps context flat is
+ * `chatConfig.recentTurnLimit` and the `memoryConfig` caps, which bound the
+ * prompt by construction. This catches the case they do not - unusually long
+ * individual turns - and it trims oldest-first, never the latest user turn.
+ */
+export const CLOUDFLARE_INPUT_TOKEN_BUDGET = 18_000;
+
 export type CloudflareTranscriptionConfig = {
   accountId: string;
   apiToken: string;
@@ -246,18 +306,18 @@ export function cloudflareTranscriptionConfig(
   };
 }
 
-export class CloudflareTranscriptionNotConfiguredError extends Error {
-  readonly name = "CloudflareTranscriptionNotConfiguredError";
+export class CloudflareNotConfiguredError extends Error {
+  readonly name = "CloudflareNotConfiguredError";
   constructor(readonly variable: string) {
     // The NAME of the missing variable, never a value, and never a hint about
     // what a valid one looks like.
-    super(`${variable} is required for Cloudflare transcription. See .env.example.`);
+    super(`${variable} is required for Cloudflare Workers AI. See .env.example.`);
   }
 }
 
 function requiredCloudflare(env: NodeJS.ProcessEnv, key: string): string {
   const value = env[key]?.trim();
-  if (!value) throw new CloudflareTranscriptionNotConfiguredError(key);
+  if (!value) throw new CloudflareNotConfiguredError(key);
   return value;
 }
 
