@@ -133,3 +133,51 @@ export async function acknowledgeClosure(
   });
   return marked !== null;
 }
+
+/**
+ * AWAITING A REPLY — the state that had no voice.
+ *
+ * A closure tells the companion that a reply ARRIVED. Nothing told it that one
+ * had not. Absence of a closure marker is silence, and silence is exactly what
+ * a language model fills in: asked "have you heard from him at all?", with a
+ * message it knows was sent and nothing saying otherwise, it produced a reply
+ * that never happened and told a lonely man his son had been in touch.
+ *
+ * So the negative is now a stated fact rather than an inference from missing
+ * context. It is derived from rows, not from the model: a DELIVERED request,
+ * inside its token window, with no response row against it.
+ *
+ * The response row is checked as well as the status column. `status` moving to
+ * `answered` is the RPC's record of a response, and the record and the fact
+ * should never disagree - but if they ever did, the one that must win is the
+ * one that can invent a reply, and that is the status column.
+ */
+export type AwaitingFamilyReply = {
+  entityName: string;
+  familyRequestId: string;
+};
+
+export async function loadAwaitingFamilyReply(
+  deps: ClosureDeps,
+  input: { userId: string },
+): Promise<AwaitingFamilyReply | null> {
+  const now = deps.clock.now().toISOString();
+  const request = await deps.familyRequests.findLatestAwaitingForUser(input.userId, now);
+  if (!request) return null;
+
+  // Belt to the status column's braces.
+  const response = await deps.familyResponses.findByRequest(request.id);
+  if (response) return null;
+
+  const opportunity = await deps.opportunities.findOwnedById(request.opportunityId, input.userId);
+  if (!opportunity) return null;
+
+  const entities = await deps.entities.listForUser(input.userId, ENTITY_SCAN_LIMIT);
+  const entityName =
+    entities.find((entity) => entity.id === opportunity.entityId)?.displayName ?? null;
+  // No name, no marker. "A message was sent to someone" is not worth saying,
+  // and a placeholder is the kind of thing that ends up read aloud.
+  if (entityName === null) return null;
+
+  return { entityName, familyRequestId: request.id };
+}

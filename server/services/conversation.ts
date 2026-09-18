@@ -5,7 +5,7 @@ import type { JobsRepo } from "@/server/repositories/jobs";
 import type { MessagesRepo, StoredMessage } from "@/server/repositories/messages";
 import { assembleContext, EMPTY_MEMORY, type MemorySections } from "./context";
 import type { ConsentOutcome, OfferResult } from "./consent";
-import type { PendingClosure } from "./closure";
+import type { AwaitingFamilyReply, PendingClosure } from "./closure";
 import type { OpportunitiesRepo } from "@/server/repositories/opportunities";
 import type { EntitiesRepo } from "@/server/repositories/entities";
 import type { ProfilesRepo } from "@/server/repositories/profiles";
@@ -72,6 +72,12 @@ export type ConsentTurnHooks = {
     recentMessages: ReadonlyArray<{ role: string; content: string; createdAt: string }>;
   }): Promise<OfferResult>;
   loadClosure(input: { userId: string }): Promise<PendingClosure | null>;
+  /**
+   * The negative fact: a message sent, no reply recorded. Required, not
+   * optional - a turn path that skipped it would answer "has he replied?" from
+   * silence, which is the P0 this exists to prevent.
+   */
+  loadAwaitingReply(input: { userId: string }): Promise<AwaitingFamilyReply | null>;
   acknowledgeClosure(input: { closureId: string; messageId: string | null }): Promise<void>;
 };
 
@@ -224,9 +230,13 @@ export async function handleTurn(
   //    the model as markers only — the family reply's wording and the outbound
   //    draft's bytes are inserted by application code, never by generation.
   let closure: PendingClosure | null = null;
+  let awaiting: AwaitingFamilyReply | null = null;
   let offer: OfferResult | null = null;
   if (deps.consent) {
     closure = await deps.consent.loadClosure({ userId: input.userId });
+    // Only when nothing has arrived. A closure IS the news; the two can never
+    // both be true, and the repository cannot return both.
+    awaiting = closure ? null : await deps.consent.loadAwaitingReply({ userId: input.userId });
     offer = await deps.consent.prepareOffer({
       userId: input.userId,
       recentMessages: recentTurns,
@@ -242,6 +252,9 @@ export async function handleTurn(
     memory: {
       ...memory,
       pendingClosure: closure?.marker ?? null,
+      awaitingFamilyReply: awaiting
+        ? { entityName: awaiting.entityName, status: "awaiting_response" }
+        : null,
       draftedOpportunityMarker: presenting
         ? { entityId: presenting.entityId, entityName: presenting.entityName, status: "drafted" }
         : null,

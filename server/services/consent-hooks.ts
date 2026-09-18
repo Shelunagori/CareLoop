@@ -1,6 +1,11 @@
 import type { ConsentTurnHooks } from "./conversation";
 import { handleConsentReply, prepareOffer, type ConsentDeps } from "./consent";
-import { acknowledgeClosure, loadPendingClosure, type ClosureDeps } from "./closure";
+import {
+  acknowledgeClosure,
+  loadAwaitingFamilyReply,
+  loadPendingClosure,
+  type ClosureDeps,
+} from "./closure";
 
 export type { ConsentDeps };
 
@@ -21,6 +26,7 @@ export function buildConsentHooks(source: ConsentTurnHooksSource): ConsentTurnHo
     readReply: (input) => handleConsentReply(source.consent, input),
     prepareOffer: (input) => prepareOffer(source.consent, input),
     loadClosure: (input) => loadPendingClosure(source.closure, input),
+    loadAwaitingReply: (input) => loadAwaitingFamilyReply(source.closure, input),
     acknowledgeClosure: async (input) => {
       await acknowledgeClosure(source.closure, input);
     },

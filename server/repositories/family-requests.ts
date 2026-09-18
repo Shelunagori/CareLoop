@@ -41,6 +41,20 @@ export type FamilyRequestsRepo = {
    */
   countOutstandingForUser(userId: string, now: string): Promise<number>;
   /**
+   * The most recent DELIVERED request this user is still waiting on.
+   *
+   * `delivered` specifically, not `pending`: the companion is about to be told
+   * a message "was sent", and for a pending row that is not yet true. And not
+   * `answered` either - `record_family_response` moves the row there the
+   * instant a reply lands, so this cannot return a request that has one.
+   *
+   * Expiry is checked against the CLOCK rather than the status column, for the
+   * same reason `countOutstandingForUser` does it: the lazy transition may not
+   * have run, and a closed window must stop being "waiting" the moment it
+   * closes.
+   */
+  findLatestAwaitingForUser(userId: string, now: string): Promise<FamilyRequestRecord | null>;
+  /**
    * The lazy lifecycle transition: pending | delivered -> expired, for
    * requests whose token window has closed. Bounded, idempotent, and safe to
    * run from any request path.
@@ -146,6 +160,20 @@ export function familyRequestsRepo(db: Db): FamilyRequestsRepo {
         .eq("reconnect_opportunities.user_id", userId);
       if (error) throw new Error(`countOutstandingFamilyRequests failed: ${error.message}`);
       return count ?? 0;
+    },
+
+    async findLatestAwaitingForUser(userId, now) {
+      const { data, error } = await db
+        .from("family_requests")
+        .select(`${SELECT}, reconnect_opportunities!inner(user_id)`)
+        .eq("status", "delivered")
+        .gt("token_expires_at", now)
+        .eq("reconnect_opportunities.user_id", userId)
+        .order("created_at", { ascending: false })
+        .limit(1);
+      if (error) throw new Error(`findLatestAwaitingFamilyRequest failed: ${error.message}`);
+      const row = data?.[0];
+      return row ? toRecord(row as Row) : null;
     },
 
     async markExpired({ id, now }) {

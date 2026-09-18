@@ -100,7 +100,7 @@ describe("production runs with OPENAI_API_KEY completely absent", () => {
   it("chat STREAMS from Cloudflare, and never contacts OpenAI", async () => {
     const { createConversationDeps } = await import("@/server/services/deps");
     const stream = await createConversationDeps().llm.streamChat({
-      promptRef: "conversation.v3",
+      promptRef: "conversation.v4",
       messages: [{ role: "user", content: "Hello Nora." }],
     });
 
@@ -186,7 +186,7 @@ describe("production runs with OPENAI_API_KEY completely absent", () => {
     const record = () => all.push(...urls);
 
     await deps.createConversationDeps().llm.streamChat({
-      promptRef: "conversation.v3",
+      promptRef: "conversation.v4",
       messages: [{ role: "user", content: "Hi." }],
     });
     record();

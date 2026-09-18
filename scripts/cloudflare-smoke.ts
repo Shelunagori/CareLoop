@@ -25,6 +25,7 @@ import { createCloudflareFamilyRender } from "@/server/adapters/cloudflare/famil
 import { EMBEDDING_STORAGE_DIMENSIONS } from "@/core/memory/embedding-dimensions";
 import { EXTRACTION_V1_JSON_SCHEMA } from "@/core/memory/extraction-contract";
 import { extractionPromptV1 } from "@/server/prompts/extraction.v1";
+import { assembleContext, EMPTY_MEMORY } from "@/server/services/context";
 
 /**
  * A message with anything credential-shaped removed.
@@ -139,6 +140,45 @@ async function main(): Promise<void> {
     // Cloudflare's wrapper instead of the model's own output.
     if (result.text.trim().startsWith("{")) {
       throw new Error("Rendered text looks like a JSON envelope, not a sentence.");
+    }
+    return null;
+  });
+
+  // 5. GROUNDING — the real model, the real v4 prompt, the real awaiting
+  //    state. A mocked test cannot prove this; only the model can.
+  await check("grounding (no invented reply)", async () => {
+    const context = assembleContext({
+      recentTurns: [
+        {
+          id: "smoke",
+          role: "user",
+          content: "Have you heard from him at all?",
+          createdAt: new Date().toISOString(),
+        },
+      ],
+      memory: { ...EMPTY_MEMORY, awaitingFamilyReply: { entityName: "Alex", status: "awaiting_response" } },
+    });
+
+    const stream = await createCloudflareLlm().streamChat({
+      promptRef: context.promptRef,
+      messages: context.messages,
+    });
+    let reply = "";
+    for await (const delta of stream) reply += delta;
+
+    // A claim that a reply arrived, in any of the shapes the live bug took.
+    const invented = [
+      /\balex (has )?(replied|answered|responded|said|got in touch)/i,
+      /\bhe (replied|answered|responded|said he|would love|is coming|'s coming)/i,
+      /\bhe said\b/i,
+      /looking forward to seeing you/i,
+    ].filter((pattern) => pattern.test(reply));
+
+    if (invented.length > 0) {
+      // The reply is printed ONLY on failure, because seeing what it invented
+      // is the entire diagnostic.
+      say(`  model said: ${reply.trim().slice(0, 240)}`);
+      throw new Error(`Model invented a family reply (${invented.length} pattern(s) matched).`);
     }
     return null;
   });

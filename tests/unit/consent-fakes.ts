@@ -133,6 +133,14 @@ export function fakeFamilyRequests(store: M5Store): FamilyRequestsRepo {
           r.tokenExpiresAt > now,
       ).length;
     },
+    async findLatestAwaitingForUser(_userId, now) {
+      // Mirrors the real query: DELIVERED, inside its window, newest first.
+      // `answered` is excluded by the status filter, exactly as in Postgres.
+      const awaiting = store.requests
+        .filter((r) => r.status === "delivered" && r.tokenExpiresAt > now)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      return awaiting[0] ?? null;
+    },
     async markExpired({ id, now }) {
       const row = store.requests.find((r) => r.id === id);
       if (!row) return null;

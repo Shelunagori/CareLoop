@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { conversationPromptV1 } from "@/server/prompts/conversation.v1";
 import { conversationPromptV2 } from "@/server/prompts/conversation.v2";
 import { conversationPromptV3 } from "@/server/prompts/conversation.v3";
+import { conversationPromptV4 } from "@/server/prompts/conversation.v4";
 import { assembleContext, EMPTY_MEMORY } from "@/server/services/context";
 
 /**
@@ -15,9 +16,13 @@ import { assembleContext, EMPTY_MEMORY } from "@/server/services/context";
  * edited after being pushed, every historical `conversation.v2` log line
  * points at text that no longer exists, and the log stops being evidence.
  *
- * M8's grounding rules therefore live in v3, and the two sealed versions are
+ * M8's grounding rules therefore live in v3, and the sealed versions are
  * pinned here by content hash - a comparison the test can make on its own,
  * with no git history to depend on.
+ *
+ * v4 is the live version. It exists because a live recording caught the
+ * companion announcing a family reply that had never happened, and v3 could
+ * not be edited to fix it.
  */
 const hash = (file: string) =>
   createHash("sha256").update(readFileSync(file)).digest("hex");
@@ -69,7 +74,12 @@ describe("1. the sealed versions are sealed", () => {
     // used, what the voice is called, or that a sentence was dictated rather
     // than typed - none of which would change what a good answer is. This
     // outlived a whole hands-free experiment being built and then removed.
-    for (const prompt of [conversationPromptV1, conversationPromptV2, conversationPromptV3]) {
+    for (const prompt of [
+      conversationPromptV1,
+      conversationPromptV2,
+      conversationPromptV3,
+      conversationPromptV4,
+    ]) {
       for (const leak of ["Nora", "wake", "hands-free", "hands free", "microphone"]) {
         expect(prompt.system, `${prompt.ref}: ${leak}`).not.toContain(leak);
       }
@@ -80,8 +90,76 @@ describe("1. the sealed versions are sealed", () => {
     expect(conversationPromptV1.ref).toBe("conversation.v1");
     expect(conversationPromptV2.ref).toBe("conversation.v2");
     expect(conversationPromptV3.ref).toBe("conversation.v3");
-    expect(new Set([conversationPromptV1.ref, conversationPromptV2.ref, conversationPromptV3.ref]).size)
-      .toBe(3);
+    expect(conversationPromptV4.ref).toBe("conversation.v4");
+    expect(
+      new Set([
+        conversationPromptV1.ref,
+        conversationPromptV2.ref,
+        conversationPromptV3.ref,
+        conversationPromptV4.ref,
+      ]).size,
+    ).toBe(4);
+  });
+});
+
+describe("1b. v4 is v3 plus the family-reply rule, and nothing lost", () => {
+  /**
+   * The P0 this version exists for: the companion told someone their son had
+   * replied when no reply existed. v3 helped it along - its "already
+   * established" section named "that someone replied, what they replied" as a
+   * record of something that happened if the assistant had said it, which made
+   * the model's own output self-authenticating.
+   */
+  it("v3's self-authenticating sentence is GONE from v4", () => {
+    expect(conversationPromptV3.system).toContain("that someone replied, what they replied");
+    expect(conversationPromptV4.system).not.toContain("that someone replied, what they replied");
+  });
+
+  it("v4 forbids being the first to say a reply arrived", () => {
+    for (const rule of [
+      "A family reply is never yours to announce",
+      "NEVER be the first to say that someone replied",
+      "evidence, and it is not permission",
+      "Only the",
+      "app's own note that a reply arrived establishes one",
+    ]) {
+      expect(conversationPromptV4.system, rule).toContain(rule);
+    }
+  });
+
+  it("v4 keeps the rule against retracting ordinary established facts", () => {
+    // The failure v3's rule was written for was real: a verified reply being
+    // taken back because the next message was ambiguous. Narrowing it must not
+    // mean losing it.
+    for (const kept of [
+      "What is already established:",
+      "is not up for revision because their next message is hard to",
+      "A short, unclear or ambiguous reply is NOT a correction",
+      "Never retract, contradict or apologise for something established earlier",
+      "the waiting is over",
+    ]) {
+      expect(conversationPromptV4.system, kept).toContain(kept);
+    }
+  });
+
+  it("v4 keeps every section v3 was carrying", () => {
+    for (const section of [
+      "How to speak:",
+      "Names:",
+      "Relationships:",
+      "Feelings are theirs to state:",
+    ]) {
+      expect(conversationPromptV4.system, section).toContain(section);
+    }
+  });
+
+  it("v4 names no fixture person", () => {
+    // Margaret is deliberately absent from this list: v3 uses it as the
+    // generic example in the Names section ("write Margaret - never Maggie"),
+    // which is instruction, not a demo fixture.
+    for (const name of ["John", "George", "Simba"]) {
+      expect(conversationPromptV4.system, name).not.toContain(name);
+    }
   });
 });
 
@@ -130,23 +208,25 @@ describe("2. v3 is v2 plus the M8 rules, and nothing lost", () => {
 });
 
 describe("3. v3 is the version that actually runs", () => {
-  it("the assembled context sends v3's bytes", () => {
+  it("the assembled context sends v4's bytes", () => {
     const context = assembleContext({ recentTurns: [], memory: EMPTY_MEMORY });
-    expect(context.messages[0].content).toBe(conversationPromptV3.system);
+    expect(context.messages[0].content).toBe(conversationPromptV4.system);
+    expect(context.messages[0].content).not.toBe(conversationPromptV3.system);
     expect(context.messages[0].content).not.toBe(conversationPromptV2.system);
   });
 
-  it("and logs conversation.v3 as the ref", () => {
+  it("and logs conversation.v4 as the ref", () => {
     // `promptRef` is what reaches the provider log, so this IS the provenance
     // record for every new call.
     expect(assembleContext({ recentTurns: [], memory: EMPTY_MEMORY }).promptRef).toBe(
-      "conversation.v3",
+      "conversation.v4",
     );
   });
 
   it("nothing on the live path still imports a sealed version", () => {
     const source = readFileSync("server/services/context.ts", "utf8");
-    expect(source).toContain("conversation.v3");
+    expect(source).toContain("conversation.v4");
+    expect(source).not.toContain("conversation.v3");
     expect(source).not.toContain("conversation.v2");
     expect(source).not.toContain("conversation.v1");
   });

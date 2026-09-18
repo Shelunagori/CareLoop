@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { chatConfig } from "@/server/config";
-import { conversationPromptV3 } from "@/server/prompts/conversation.v3";
+import { conversationPromptV4 } from "@/server/prompts/conversation.v4";
 import {
   ConversationNotFoundError,
   handleTurn,
@@ -113,12 +113,12 @@ describe("handleTurn", () => {
 
     const request = llm.lastRequest();
     expect(request).not.toBeNull();
-    expect(request!.promptRef).toBe("conversation.v3");
+    expect(request!.promptRef).toBe("conversation.v4");
 
     const [system, ...rest] = request!.messages;
     expect(system.role).toBe("system");
     // Byte-identical to the versioned prompt: nothing is appended at runtime.
-    expect(system.content).toBe(conversationPromptV3.system);
+    expect(system.content).toBe(conversationPromptV4.system);
     expect(rest).toEqual([{ role: "user", content: "hello" }]);
   });
 

@@ -1,7 +1,7 @@
 import type { ClosureMarker } from "@/core/family/closure";
 import type { LlmMessage } from "@/server/adapters/openai/types";
 import type { StoredMessage } from "@/server/repositories/messages";
-import { conversationPromptV3 } from "@/server/prompts/conversation.v3";
+import { conversationPromptV4 } from "@/server/prompts/conversation.v4";
 
 /**
  * Deterministic context assembly (docs/01 §2.1 step 3). No LLM, no I/O — this
@@ -19,6 +19,20 @@ export type DraftedOpportunityMarker = {
   status: "drafted";
 };
 
+/**
+ * A message was sent and no reply has come. APPLICATION-DERIVED, from a
+ * delivered request with no response row.
+ *
+ * The counterpart to `pendingClosure`, and the one that was missing. Without
+ * it the model was told when a reply had arrived and told nothing at all when
+ * one had not - so "has John replied?" was answered from silence, and a model
+ * answering from silence invents.
+ */
+export type AwaitingFamilyReplyMarker = {
+  entityName: string;
+  status: "awaiting_response";
+};
+
 export type MemorySections = {
   /** M2: stable user facts, budgeted ~250 tokens. */
   profileCard: string | null;
@@ -32,6 +46,11 @@ export type MemorySections = {
    * a deterministic factual sentence.
    */
   pendingClosure: ClosureMarker | null;
+  /**
+   * P0: a sent message with no reply yet. A NAME and a STATE - never the
+   * address, the token, the request id, the payload or the message text.
+   */
+  awaitingFamilyReply: AwaitingFamilyReplyMarker | null;
   /** F1/E1: marker ONLY. Never rendered_text, never the SharePayload. */
   draftedOpportunityMarker: DraftedOpportunityMarker | null;
 };
@@ -41,6 +60,7 @@ export const EMPTY_MEMORY: MemorySections = {
   entityCards: [],
   episodes: [],
   pendingClosure: null,
+  awaitingFamilyReply: null,
   draftedOpportunityMarker: null,
 } as const;
 
@@ -50,6 +70,7 @@ function hasMemory(memory: MemorySections): boolean {
     memory.entityCards.length > 0 ||
     memory.episodes.length > 0 ||
     memory.pendingClosure !== null ||
+    memory.awaitingFamilyReply !== null ||
     memory.draftedOpportunityMarker !== null
   );
 }
@@ -86,6 +107,29 @@ function renderClosure(marker: ClosureMarker): string[] {
     "Do not say you will let them know when there is news, do not say you are",
     "still waiting to hear, and do not say you have not heard yet. All three",
     "are now false.",
+  ];
+}
+
+/**
+ * The awaiting-reply marker.
+ *
+ * Phrased as a fact and then as an instruction, because the fact alone was not
+ * enough: a model that knows a message was sent will happily narrate what came
+ * back. The sentence it is allowed to say is spelled out so that answering
+ * honestly is the easiest thing to do, not a gap it has to be disciplined out
+ * of filling.
+ */
+function renderAwaitingReply(marker: AwaitingFamilyReplyMarker): string[] {
+  return [
+    "",
+    `A message was sent to ${marker.entityName}. NO reply has been recorded.`,
+    `This is the app's own record, and it is complete: if ${marker.entityName}`,
+    "had answered, it would say so here. It does not.",
+    `So ${marker.entityName} has NOT replied, has NOT said anything, has NOT`,
+    "agreed to anything and has NOT declined. If they ask whether there is any",
+    "news, tell them warmly that you have not heard back yet. Do not invent a",
+    "reply, do not guess what the answer might be, and do not soften the wait",
+    "by hinting that one is on its way.",
   ];
 }
 
@@ -135,6 +179,15 @@ function renderMemory(memory: MemorySections): string {
   }
 
   if (memory.pendingClosure) blocks.push(...renderClosure(memory.pendingClosure));
+  /**
+   * Never both. A closure means a reply just arrived; saying in the same
+   * breath that none has would be the contradiction this whole fix is about.
+   * The closure wins, and the repository cannot produce both anyway - an
+   * answered request is no longer `delivered`.
+   */
+  if (!memory.pendingClosure && memory.awaitingFamilyReply) {
+    blocks.push(...renderAwaitingReply(memory.awaitingFamilyReply));
+  }
   if (memory.draftedOpportunityMarker) {
     blocks.push(...renderDraftedMarker(memory.draftedOpportunityMarker));
   }
@@ -163,14 +216,14 @@ export function assembleContext(input: {
   // The base prompt is never mutated. Memory is appended as a second system
   // message so an empty-memory turn is byte-identical to M1.
   const system: LlmMessage[] = [
-    { role: "system", content: conversationPromptV3.system },
+    { role: "system", content: conversationPromptV4.system },
   ];
   if (hasMemory(memory)) {
     system.push({ role: "system", content: renderMemory(memory) });
   }
 
   return {
-    promptRef: conversationPromptV3.ref,
+    promptRef: conversationPromptV4.ref,
     messages: [...system, ...turns],
   };
 }

@@ -60,6 +60,8 @@ export async function loadMemoryForTurn(
     episodes,
     // M4/M5 seams — still deliberately unfilled.
     pendingClosure: null,
+    // Both family markers are decided in the turn, not by memory retrieval.
+    awaitingFamilyReply: null,
     draftedOpportunityMarker: null,
   };
 }

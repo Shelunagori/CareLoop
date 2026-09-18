@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { renderEntityCard } from "@/core/memory/present";
-import { conversationPromptV3 } from "@/server/prompts/conversation.v3";
+import { conversationPromptV4 } from "@/server/prompts/conversation.v4";
 import { EMPTY_MEMORY, assembleContext } from "@/server/services/context";
 import type { StoredMessage } from "@/server/repositories/messages";
 
@@ -14,10 +14,10 @@ describe("assembleContext", () => {
       recentTurns: [turn("user", "hi", 1), turn("assistant", "hello", 2)],
     });
 
-    expect(context.promptRef).toBe("conversation.v3");
+    expect(context.promptRef).toBe("conversation.v4");
     expect(context.messages[0]).toEqual({
       role: "system",
-      content: conversationPromptV3.system,
+      content: conversationPromptV4.system,
     });
     expect(context.messages).toHaveLength(3);
   });
@@ -40,7 +40,7 @@ describe("assembleContext", () => {
     // What must be absent is a rendered memory SECTION, which is every message
     // other than the prompt and the turns themselves.
     const blob = context.messages
-      .filter((m) => m.content !== conversationPromptV3.system)
+      .filter((m) => m.content !== conversationPromptV4.system)
       .map((m) => m.content)
       .join("\n")
       .toLowerCase();
@@ -69,7 +69,7 @@ describe("assembleContext", () => {
     });
 
     // The base prompt is never mutated.
-    expect(context.messages[0].content).toBe(conversationPromptV3.system);
+    expect(context.messages[0].content).toBe(conversationPromptV4.system);
     expect(context.messages[1].role).toBe("system");
     expect(context.messages[1].content).toContain("preferred_drink: tea");
     expect(context.messages[1].content).toContain("Simba");
@@ -127,7 +127,7 @@ describe("names reach the model as data, not as style", () => {
    * "be warm and natural" instructions above it cannot quietly outrank.
    */
   it("the prompt states the rule, with the forbidden shapes named", () => {
-    const system = conversationPromptV3.system;
+    const system = conversationPromptV4.system;
     expect(system).toContain("name to use");
     expect(system).toContain("use the 'name to use' exactly as");
     // Every shape the review listed, so a future edit cannot drop one quietly.
@@ -149,7 +149,7 @@ describe("names reach the model as data, not as style", () => {
     // The rule is about which NAME is used, not about naming someone every
     // time. Forcing the proper name into every sentence reads like a system,
     // not a companion.
-    const system = conversationPromptV3.system;
+    const system = conversationPromptV4.system;
     expect(system).toContain("You do not have to name someone every time");
     expect(system).toContain("'him', 'her', 'they' are");
     expect(system).toContain("a relationship the notes actually record");
@@ -157,7 +157,7 @@ describe("names reach the model as data, not as style", () => {
   });
 
   it("the rule is scoped to recorded aliases, and to their use first", () => {
-    const system = conversationPromptV3.system;
+    const system = conversationPromptV4.system;
     expect(system).toContain("other names on record");
     expect(system).toContain("only if the user uses that recorded name first");
     // Never selected on the model's own initiative.
@@ -173,14 +173,14 @@ describe("names reach the model as data, not as style", () => {
     const { conversationPromptV1 } = await import("@/server/prompts/conversation.v1");
     expect(conversationPromptV1.ref).toBe("conversation.v1");
     expect(conversationPromptV1.system).not.toContain("name to use");
-    expect(conversationPromptV3.ref).toBe("conversation.v3");
+    expect(conversationPromptV4.ref).toBe("conversation.v4");
   });
 
   it("the prompt carries no example name from the demo fixture", () => {
     // The rule is generic. Coupling the prompt to the demo cast would be the
     // fixture leaking into shipped behaviour.
     for (const name of ["George", "John", "Johnny", "Simba"]) {
-      expect(conversationPromptV3.system, name).not.toContain(name);
+      expect(conversationPromptV4.system, name).not.toContain(name);
     }
   });
 
@@ -279,7 +279,7 @@ describe("an observable absence is not an emotional state", () => {
    * This is the CONTRACT. The behavioural assertion needs a live model and
    * lives in tests/contract.
    */
-  const system = conversationPromptV3.system;
+  const system = conversationPromptV4.system;
 
   it("separates what happened from how it felt, in so many words", () => {
     expect(system).toContain("Feelings are theirs to state");
@@ -399,13 +399,32 @@ describe("a verified update survives an ambiguous reply", () => {
    * Fixed in the prompt alone — no closure, consent, notifier, lifecycle,
    * memory or fixture change — because the evidence was already in context.
    */
-  const system = conversationPromptV3.system;
+  const system = conversationPromptV4.system;
 
   it("states that what was already said is a record, not a guess", () => {
     expect(system).toContain("What is already established");
     expect(system).toContain("is a record");
     expect(system).toContain("not up for");
-    expect(system).toContain("revision because their next message is hard to read");
+    // Checked with line breaks collapsed: the rule is the sentence, not the
+    // column it happens to wrap at. v4 re-wrapped this line while leaving the
+    // rule identical, and a character-exact assertion failed for no reason
+    // anyone should have to investigate.
+    expect(system.replace(/\s+/g, " ")).toContain(
+      "revision because their next message is hard to read",
+    );
+  });
+
+  it("but that record does NOT extend to family replies", () => {
+    // The P0: v3 named "that someone replied, what they replied" as
+    // established if the assistant had said it, which made the model's own
+    // output its own evidence.
+    expect(system).not.toContain("that someone replied, what they replied");
+    expect(system.replace(/\s+/g, " ")).toContain(
+      "This does NOT extend to family replies",
+    );
+    expect(system.replace(/\s+/g, " ")).toContain(
+      "Your own earlier wording is not proof that a reply arrived",
+    );
   });
 
   it("names ambiguity as ambiguity, not as a correction", () => {
@@ -544,7 +563,7 @@ describe("a reply that has arrived ends the waiting", () => {
   it("the standing rule is in the prompt, not only in the marker", () => {
     // The marker is present for exactly one turn. The rule has to survive the
     // turns after it, when the news is only in the transcript.
-    const system = conversationPromptV3.system;
+    const system = conversationPromptV4.system;
     expect(system).toContain("the waiting is over");
     expect(system.toLowerCase()).toContain("still waiting");
     for (const name of ["George", "John", "Simba"]) {
@@ -585,7 +604,7 @@ describe("relationships reach the model with their direction intact", () => {
       ],
       memory: { ...EMPTY_MEMORY, entityCards: [petCard()] },
     })
-      .messages.filter((message) => message.content !== conversationPromptV3.system)
+      .messages.filter((message) => message.content !== conversationPromptV4.system)
       .map((message) => message.content)
       .join("\n");
 
@@ -599,7 +618,7 @@ describe("relationships reach the model with their direction intact", () => {
   });
 
   it("the prompt forbids turning a label into ownership", () => {
-    const system = conversationPromptV3.system;
+    const system = conversationPromptV4.system;
     expect(system).toContain("family_pet");
     expect(system.toLowerCase()).toContain("is not a possessive");
     expect(system).toContain("does NOT make the animal theirs");
@@ -608,14 +627,14 @@ describe("relationships reach the model with their direction intact", () => {
   it("the prompt still permits a relationship the notes do record", () => {
     // The rule narrows what may be claimed, not what may be said. "your son"
     // stays available when an edge records it.
-    const system = conversationPromptV3.system;
+    const system = conversationPromptV4.system;
     expect(system).toContain("recorded relationship");
     expect(system).toContain("'your daughter' is fine");
   });
 
   it("the rule carries no fixture name", () => {
     for (const name of ["George", "John", "Simba", "Pepper", "Rowan"]) {
-      expect(conversationPromptV3.system, name).not.toContain(name);
+      expect(conversationPromptV4.system, name).not.toContain(name);
     }
   });
 });
@@ -633,7 +652,7 @@ describe("relationships reach the model with their direction intact", () => {
  * identity question wants the specific one.
  */
 describe("an identity question wants the most specific relationship", () => {
-  const system = conversationPromptV3.system;
+  const system = conversationPromptV4.system;
 
   it("names the questions the rule applies to", () => {
     expect(system).toContain("Who is");
