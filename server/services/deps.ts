@@ -1,7 +1,7 @@
 import "server-only";
 import { systemClock } from "@/server/adapters/clock";
 import { demoFixtureRepo } from "@/server/repositories/demo-fixture";
-import { createOpenAiTranscription } from "@/server/adapters/openai/transcription";
+import { createCloudflareTranscription } from "@/server/adapters/cloudflare/transcription";
 import { createElevenLabsVoice } from "@/server/adapters/elevenlabs/voice";
 import type { SynthesisDeps, TranscriptionDeps } from "@/server/services/voice";
 import type { SpeakableDeps } from "@/server/services/speakable";
@@ -266,9 +266,18 @@ export function createBaselineDebugDeps(): BaselineDebugDeps {
  * The development-only demo fixture. Constructed nowhere but the demo routes,
  * so the delete surface it carries cannot be reached from the product.
  */
-/** M8 voice I/O. Constructed only by the two voice routes. */
+/**
+ * M8 voice I/O. Constructed only by the two voice routes.
+ *
+ * Transcription runs on CLOUDFLARE WORKERS AI, and only there. There is
+ * deliberately no environment switch back to OpenAI and no fallback on
+ * failure: an accidental OpenAI transcription is the exact cost this
+ * migration removes, so a misconfigured deployment fails by name instead.
+ * The OpenAI adapter still exists and is still tested, but nothing
+ * constructs it - swapping providers is this one line.
+ */
 export function createTranscriptionDeps(): TranscriptionDeps {
-  return { speechToText: createOpenAiTranscription() };
+  return { speechToText: createCloudflareTranscription() };
 }
 
 /**

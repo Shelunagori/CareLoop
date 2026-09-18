@@ -212,6 +212,56 @@ export function isLocalOperatorHost(input: {
 }
 
 /**
+ * Cloudflare Workers AI, the active transcription provider.
+ *
+ * Read lazily and ALL REQUIRED except the model, which has a default. A
+ * deployment that is missing one of these must fail by name: the alternative
+ * is falling back to OpenAI transcription, which is the cost this migration
+ * exists to stop.
+ *
+ * The language is deliberately NOT `OPENAI_TRANSCRIPTION_LANGUAGE`. That
+ * variable belongs to a provider that is no longer on this path, and reading
+ * it here would leave the Cloudflare route quietly configured by a name that
+ * says OpenAI. Default "en", for the same reason as before: a one-word clip
+ * gives automatic detection almost nothing to go on, and a live "yes" once
+ * came back as a Chinese character.
+ */
+export type CloudflareTranscriptionConfig = {
+  accountId: string;
+  apiToken: string;
+  model: string;
+  language: string;
+};
+
+export const DEFAULT_CLOUDFLARE_TRANSCRIPTION_MODEL = "@cf/openai/whisper-large-v3-turbo";
+
+export function cloudflareTranscriptionConfig(
+  env: NodeJS.ProcessEnv = process.env,
+): CloudflareTranscriptionConfig {
+  return {
+    accountId: requiredCloudflare(env, "CLOUDFLARE_ACCOUNT_ID"),
+    apiToken: requiredCloudflare(env, "CLOUDFLARE_API_TOKEN"),
+    model: env.CLOUDFLARE_TRANSCRIPTION_MODEL?.trim() || DEFAULT_CLOUDFLARE_TRANSCRIPTION_MODEL,
+    language: env.CARELOOP_TRANSCRIPTION_LANGUAGE?.trim() || "en",
+  };
+}
+
+export class CloudflareTranscriptionNotConfiguredError extends Error {
+  readonly name = "CloudflareTranscriptionNotConfiguredError";
+  constructor(readonly variable: string) {
+    // The NAME of the missing variable, never a value, and never a hint about
+    // what a valid one looks like.
+    super(`${variable} is required for Cloudflare transcription. See .env.example.`);
+  }
+}
+
+function requiredCloudflare(env: NodeJS.ProcessEnv, key: string): string {
+  const value = env[key]?.trim();
+  if (!value) throw new CloudflareTranscriptionNotConfiguredError(key);
+  return value;
+}
+
+/**
  * M4 detection. Every number here is a BOUND: a sweep runs on an ordinary
  * request, so it must cost a predictable amount no matter how much history an
  * account has accumulated. Nothing full-scans.

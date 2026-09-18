@@ -5,6 +5,29 @@ const code = (file: string) =>
   readFileSync(file, "utf8")
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/\/\/.*$/gm, "");
+
+/**
+ * The transcription adapter that is actually WIRED UP, discovered from the
+ * composition root rather than hardcoded.
+ *
+ * The guards below assert the properties that matter most - no audio in a log,
+ * no audio on disk. Pointing them at a named file made them lie the moment
+ * transcription moved to another provider: they went on proving things about
+ * an adapter nothing constructs any more, and the live one was unguarded.
+ * Following the switch means swapping providers re-aims the guards, or fails
+ * here because the new adapter cannot be found.
+ */
+const activeTranscriptionAdapter = (): string => {
+  const deps = code("server/services/deps.ts");
+  const body = /createTranscriptionDeps\(\)[^{]*\{([\s\S]*?)\n\}/.exec(deps)?.[1];
+  const factory = /speechToText:\s*(\w+)\(/.exec(body ?? "")?.[1];
+  expect(factory, "createTranscriptionDeps does not construct a speechToText provider").toBeTruthy();
+  const specifier = new RegExp(`import \\{[^}]*\\b${factory}\\b[^}]*\\} from "@/(.*?)"`).exec(
+    deps,
+  )?.[1];
+  expect(specifier, `no import found for ${factory}`).toBeTruthy();
+  return `${specifier}.ts`;
+};
 import { describe, expect, it } from "vitest";
 import {
   ALLOWED_AUDIO_TYPES,
@@ -242,7 +265,7 @@ describe("4. voice decides nothing", () => {
     for (const file of [
       "server/services/voice.ts",
       "app/api/voice/transcribe/route.ts",
-      "server/adapters/openai/transcription.ts",
+      activeTranscriptionAdapter(),
     ]) {
       const source = code(file);
       for (const forbidden of ["writeFile", "createWriteStream", "storage", "upload(", "insert("]) {
@@ -252,7 +275,7 @@ describe("4. voice decides nothing", () => {
   });
 
   it("nothing about the audio reaches a log line", () => {
-    const source = code("server/adapters/openai/transcription.ts");
+    const source = code(activeTranscriptionAdapter());
     // The RECORDS themselves, not the file: the file necessarily mentions
     // audio, since that is what it transcribes.
     const records = [...source.matchAll(/logProviderCall\(\{([\s\S]*?)\}\);/g)].map(
@@ -277,7 +300,7 @@ describe("4. voice decides nothing", () => {
      * so the compromise is asymmetric: a FAILED call records the size, a
      * SUCCESSFUL one records nothing about the recording at all.
      */
-    const source = code("server/adapters/openai/transcription.ts");
+    const source = code(activeTranscriptionAdapter());
     const records = [...source.matchAll(/logProviderCall\(\{([\s\S]*?)\}\);/g)].map(
       (match) => match[1],
     );
@@ -527,19 +550,21 @@ describe("8. transcription is told what language to expect", () => {
   it("the adapter sends it to the provider", () => {
     // Asserted structurally rather than by naming a language: the point is
     // that SOMETHING is pinned, and that it is the configured value.
-    const source = code("server/adapters/openai/transcription.ts");
-    expect(source).toContain("const language = transcriptionLanguage();");
-    expect(source).toContain(
-      "client.audio.transcriptions.create({ file, model, language })",
-    );
-    // And no prompt-side coercion anywhere near it.
+    const source = code(activeTranscriptionAdapter());
+    // WHAT it sends is asserted over a stubbed fetch in
+    // tests/unit/cloudflare-transcription.test.ts, which is the only way to
+    // prove a wire format. What is asserted here is that the language is
+    // configuration rather than a literal buried in the request, and that
+    // nothing tries to steer the language through the prompt side instead.
+    expect(source).toContain("language");
+    expect(source).not.toMatch(/language:\s*"[a-z]{2}"/);
     for (const forbidden of ["prompt:", "Respond in", "in English"]) {
       expect(source, forbidden).not.toContain(forbidden);
     }
   });
 
   it("the language reaches the log, so a wrong one is diagnosable", () => {
-    const source = code("server/adapters/openai/transcription.ts");
+    const source = code(activeTranscriptionAdapter());
     const records = [...source.matchAll(/logProviderCall\(\{([\s\S]*?)\}\);/g)].map((m) => m[1]);
     expect(records.some((record) => record.includes("language"))).toBe(true);
     // Still no transcript, and still no audio.

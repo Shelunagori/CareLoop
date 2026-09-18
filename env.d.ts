@@ -29,6 +29,16 @@ declare namespace NodeJS {
     // Exactly "true" turns a deployment into a public anonymous demo.
     CARELOOP_DEMO_MODE?: string;
     // M11, production family delivery by email. Server-only, all three.
+    /**
+     * Cloudflare Workers AI. The account id and token are REQUIRED - the
+     * active speech-to-text provider - and server-only; the model and
+     * language have defaults.
+     */
+    CLOUDFLARE_ACCOUNT_ID?: string;
+    CLOUDFLARE_API_TOKEN?: string;
+    CLOUDFLARE_TRANSCRIPTION_MODEL?: string;
+    CARELOOP_TRANSCRIPTION_LANGUAGE?: string;
+
     BREVO_API_KEY?: string;
     BREVO_SENDER_EMAIL?: string;
     BREVO_SENDER_NAME?: string;
