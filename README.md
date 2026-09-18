@@ -1,23 +1,277 @@
 # CareLoop
 
+**An engineering exploration inspired by Olympia.**
+
 A long-term conversational companion for older adults. It learns the people and
 routines that matter to someone, notices observable changes, and — only with
 explicit consent — helps them reconnect with family.
+
+While exploring Olympia, I became interested in what longitudinal
+conversational memory could enable once a companion becomes proactive rather
+than purely responsive. CareLoop is a working answer to one question:
+
+> Can a companion notice a meaningful change in someone's relationships or
+> routines and help them reconnect — without giving the language model
+> authority over real-world decisions?
 
 The governing invariant, in one line:
 
 > **The LLM is a sensor and a renderer; it is never the decision-maker.**
 
-Live demo: <https://care-loop-lac.vercel.app> — each visitor gets their own
-anonymous session and their own seeded world; see [The public demo](#the-public-demo).
+## Explore CareLoop
+
+| | |
+|---|---|
+| **[Engineering Review](https://care-loop-lac.vercel.app/review)** | The full stage-by-stage walkthrough. **Start here** — it explains the architecture before asking you to use anything. |
+| **[Live Demo](https://care-loop-lac.vercel.app)** | Your own anonymous session and your own seeded world. |
+| **[Source Code](https://github.com/Shelunagori/CareLoop)** | This repository. |
+
+## Contents
+
+[What CareLoop explores](#what-careloop-explores) ·
+[Try it in two minutes](#try-it-in-two-minutes) ·
+[How it works](#how-it-works) ·
+[Language intelligence vs authority](#language-intelligence-vs-authority) ·
+[Architecture](#architecture) ·
+[Technology stack](#technology-stack) ·
+[What live testing changed](#what-live-testing-changed) ·
+[Privacy and safety](#privacy-and-safety) ·
+[Repository layout](#repository-layout) ·
+[Local setup](#local-setup) ·
+[Deeper engineering reference](#deeper-engineering-reference)
+
+## What CareLoop explores
+
+A long-term conversational companion prototype. It maintains structured
+relationships and conversational memory over time, notices observable changes
+in routines or explicit statements of absence, and — only with explicit
+consent — helps initiate a family reconnection.
+
+It does not diagnose, and it does not infer mood, loneliness or cognitive
+decline. "I haven't seen John" is an observable statement about a week;
+"George is lonely" is a claim about someone's inner life, and the system is
+built so that claim cannot be made.
+
+George, John and Simba are synthetic demo data — rows in a seeded fixture, not
+names any code branches on.
+
+This is an engineering exploration inspired by the product space, not a
+competitor to or a critique of anything in it.
+
+## Try it in two minutes
+
+1. Start the [demo](https://care-loop-lac.vercel.app)
+2. Ask *"Who is Simba?"*
+3. Say *"I haven't seen John today."*
+4. Read the proposed message and approve it — word for word, this is what travels
+5. **Before any reply arrives**, ask whether John has replied
+6. Open the delivered email and answer as John
+7. Return to CareLoop and ask *"Any update from John?"*
+
+Step 5 is the one worth doing deliberately: it is where most companions would
+guess.
+
+For the complete stage-by-stage explanation of what happens behind the screen,
+see the **[Engineering Review](https://care-loop-lac.vercel.app/review)**.
+
+## How it works
+
+```
+George
+  ↓  conversation                          probabilistic — language in, language out
+  ↓  structured observation                probabilistic — extraction against a schema
+  ↓  memory / relationship context         DETERMINISTIC — SQL relations; pgvector for episodes
+  ↓  pattern detection                     DETERMINISTIC — baselines, explicit thresholds
+  ↓  reconnect opportunity                 DETERMINISTIC — a row, not a hunch
+  ↓  exact-text consent                    DETERMINISTIC — shown, approved, hashed
+  ↓  authorized family request             DETERMINISTIC — one transaction
+  ↓  Brevo                                 transport
+John
+  ↓  capability response                   DETERMINISTIC — bounded choices
+  ↓  persisted family response             DETERMINISTIC — a row
+  ↓  deterministic closure                 DETERMINISTIC — no model is called at all
+George
+```
+
+The model appears twice, at the start, translating language in both
+directions. Every step that decides something — whether a pattern counts,
+whether consent was given, whether a message may be sent, whether a reply
+arrived — is deterministic code in `core/` or a conditional SQL update.
+
+### Exact-text consent
+
+```
+WHAT GEORGE SEES
+      =
+WHAT GEORGE APPROVES
+      =
+WHAT JOHN RECEIVES
+```
+
+- The draft is **persisted before** it is shown.
+- Approval applies to that exact stored text, identified by hash.
+- The hash is re-checked before delivery.
+- Nothing is regenerated after approval.
+- The conversational model has no part in the send path after approval.
+- Ambiguity does not approve: a parser returning `unclear` leaves the offer standing.
+
+Details in [The consent rule](#the-consent-rule).
+
+## Language intelligence vs authority
+
+| Language model (probabilistic) | Application (deterministic, authoritative) |
+|---|---|
+| Understand conversational language | Entity resolution rules |
+| Extract structured observations | Memory commits |
+| Use bounded retrieved context | Cadence and baseline calculation |
+| Produce ordinary conversational prose | Pattern thresholds |
+| Render a family draft from minimized data | Signal creation |
+| | Reconnect opportunity state |
+| | Consent |
+| | Outbound authorization |
+| | The exact approved bytes |
+| | External-world family response state |
+| | Verified closure |
+
+> Use models where ambiguity is useful. Use deterministic application state
+> wherever an action, a privacy boundary, or an external-world truth is
+> involved.
+
+## Architecture
+
+```
+app/                 →  server/services/  →  server/repositories/  →  core/
+HTTP + UI               use-cases            Postgres + state         pure domain
+                                          →  server/adapters/
+                                             external providers
+```
+
+| Layer | Responsibility |
+|---|---|
+| `core/` | Pure deterministic domain logic. No I/O, no SDK, no clock. |
+| `server/services/` | Use-case orchestration — a turn, a send, a closure. |
+| `server/repositories/` | Postgres access and state transitions. |
+| `server/adapters/` | External providers, behind ports. |
+| `app/` | HTTP routes and UI. |
+
+Dependencies point one way, enforced by ESLint. Every vendor sits behind a
+port — `LlmProvider`, `ExtractionProvider`, `EmbeddingProvider`,
+`SpeechToTextProvider`, `VoiceProvider`, `FamilyRenderProvider`, `Notifier`,
+`Clock` — so the domain depends on a capability rather than on a company.
+Moving the whole AI stack between providers was one line of the composition
+root plus new adapters; no route, service or domain module changed.
+
+## Technology stack
+
+| | Role |
+|---|---|
+| Next.js 16 + TypeScript | Application, routes, orchestration, UI |
+| Supabase Postgres | Persistent state — conversations through closures |
+| Supabase Auth | Isolated anonymous reviewer sessions |
+| pgvector | Episodic similarity retrieval only — see below |
+| **Cloudflare Workers AI** | **Active provider for all five AI paths**: conversation, extraction, family rendering, embeddings, transcription |
+| ElevenLabs | Optional text-to-speech |
+| Brevo | Transactional family email |
+| Vercel | Deployment (`sin1`, beside the database) |
+| Vitest + PGlite | Testing, against real Postgres-compatible behaviour |
+
+pgvector is used **only** for episodic similarity retrieval — recalling things
+someone once described. Entity and relationship identity is resolved
+relationally, not through vector search: who somebody is, and how they are
+related, are facts in tables rather than nearest neighbours.
+
+Committed model ids:
+
+| | |
+|---|---|
+| Text | `@cf/meta/llama-3.3-70b-instruct-fp8-fast` |
+| Embeddings | `@cf/baai/bge-m3` |
+| Transcription | `@cf/openai/whisper-large-v3-turbo` |
+
+## What live testing changed
+
+Each came from running the thing for real. The pattern is the same all three
+times: **test → observe → move an architectural boundary** — not "add another
+instruction to the prompt".
+
+| | Observed | Change |
+|---|---|---|
+| **1** | Asked whether a family member had been in touch, the model produced a plausible reply that did not exist. | Waiting/reply state became application-owned: a delivered request with no response puts an explicit negative into the turn. |
+| **2** | After a genuine reply, the deterministic update was followed by contradictory generated language. | Verified closure turns became fully deterministic — the conversational model is not invoked. |
+| **3** | A wake-word prototype was not reliable enough for a dependable product experience. | Removed it and kept push-to-talk. Four general correctness fixes it surfaced were retained. |
+
+## Privacy and safety
+
+- No medical diagnosis
+- No loneliness or mood inference
+- No transcript shared with family
+- Exact-text consent before anything is sent
+- No automatic or implied approval
+- No post-approval rewriting
+- No plaintext family capability token persisted
+- No background microphone
+- Raw audio is transient only
+- Family receive only minimized, approved information
+- Verified external-world state is application-owned
+
+## Repository layout
+
+| Path | What lives here |
+|---|---|
+| `app/` | Routes and UI. Depends on `server/services`, never on repositories directly. |
+| `core/` | Pure domain: baselines, detection, consent, safety guards, minimization. No I/O, no framework, no database — enforced by ESLint. |
+| `server/services/` | Use-cases that compose repositories, adapters and `core`. |
+| `server/repositories/` | Typed Postgres access, one per aggregate. Every transition is a conditional update. |
+| `server/adapters/` | Ports: LLM, extraction, embeddings, family renderer, notifier, clock. |
+| `server/prompts/` | Versioned prompt files; a prompt change is a behaviour change. |
+| `server/db/` | Supabase client seam and generated types. |
+| `supabase/migrations/` | Schema, RLS and the atomic RPCs. |
+| `fixtures/`, `scripts/` | Demo timeline and the seeder that replays it through the production pipeline. |
+| `tests/` | `unit` (pure core and services), `db` (real Postgres via PGlite), `golden` (recorded extraction). |
+
+Dependency direction: `app → server/services → repositories/adapters → core`.
+
+## Local setup
+
+Requires **Node 22 or newer** (`engines.node`, `.nvmrc`).
+
+```bash
+npm install
+cp .env.example .env.local     # then fill it in — see below
+npm run dev
+```
+
+`.env.example` documents every variable and is placeholders only. What each
+group does is in [Technology stack](#technology-stack); what you have to
+configure is here:
+
+| Configuration | Required |
+|---|---|
+| Supabase | yes |
+| Cloudflare Workers AI | yes — one account id and one API token cover every AI path |
+| Brevo | required for real family email delivery |
+| ElevenLabs | optional |
+| `OPENAI_*` compatibility variables | not required by any active runtime path |
+
+Model ids all have defaults and need setting only to pin something else. The
+`OPENAI_*` variables are kept for rollback compatibility with the previously
+deployed revision; local development needs none of them.
+
+---
+
+# Deeper engineering reference
+
+Everything below is implementation detail: the same decisions, with the
+reasoning and the failure each one was written against.
 
 Every decision that matters — whether a pattern counts as a change, whether an
 opportunity may be offered, whether consent was given, whether a message may be
 sent — is made by pure deterministic code in `core/` or by a conditional SQL
 update. The model extracts structure from speech and renders words; it never
-chooses. The architecture is frozen: the decision record is
-`docs/00-overview.md` (D1–D8, R1–R8, F1–F6, E1–E3). Read it before changing
-anything structural.
+chooses.
+
+**The architecture is frozen.** The decision record is `docs/00-overview.md`
+(D1–D8, R1–R8, F1–F6, E1–E3). Read it before changing anything structural.
 
 ## Status
 
@@ -111,7 +365,8 @@ opportunity must all name the same entity. Foreign keys prove those ids are
 real; they prove nothing about them belonging together, and `service_role`
 bypasses RLS.
 
-The ordering matters because a database cannot transact with an SMS provider.
+The ordering matters because a database cannot transact with an external
+delivery provider.
 Consuming first means the surviving crash window is "authorized but not yet
 delivered" — unfinished transport, which a retry fixes. Consuming after
 delivery would instead leave "delivered but consent still live", and the retry
@@ -194,37 +449,6 @@ load-bearing: a turn path that cannot read the pending offer ends every turn by
 saying there is none, and the card it just drew disappears while the
 opportunity stays open. The turn's dependencies require that read model, so
 omitting it is a compile error rather than a vanishing card.
-
-## Setup
-
-Requires **Node 22 or newer** (`engines.node`, `.nvmrc`).
-
-```bash
-npm install
-cp .env.example .env.local     # then fill it in — see below
-npm run dev
-```
-
-`.env.example` documents every variable and is placeholders only. What each
-group is for:
-
-| Group | Needed for | Required |
-|---|---|---|
-| Supabase | database, auth, RLS | yes |
-| Cloudflare Workers AI | conversation, extraction, embeddings, transcription, family rendering | yes |
-| Brevo | family email delivery on a deployment or the public demo | for delivery |
-| ElevenLabs | reading replies aloud | no |
-
-**Cloudflare Workers AI is the active provider for every AI path.** One account
-id and one API token cover all five; the model ids default and need setting
-only to pin something else.
-
-ElevenLabs is genuinely optional: without it CareLoop is fully usable by typing
-and by speaking, and only the speak-aloud endpoint answers a clean 503.
-
-The `OPENAI_*` variables in `.env.example` are **dormant** — kept for
-rollback compatibility with the previous deployed revision, not read by any
-active path. Local development needs none of them.
 
 ## Database
 
@@ -318,7 +542,7 @@ exact `x-careloop-dev-secret` header match. Anything else returns a bare 404.
 | `/debug` | GET | Inspect baselines, signals, opportunities, consent grants and family requests |
 | `/api/dev/seed-events` | POST | Replay the demo timeline through the production pipeline |
 | `/api/dev/detect` | POST | Run a detection sweep on demand |
-| `/api/dev/family-inbox` | GET | Read the dev notifier's outbox (stands in for SMS/email) |
+| `/api/dev/family-inbox` | GET | Read the dev notifier's outbox (stands in for real delivery) |
 | `/dev/family-inbox` | GET | The same outbox as an inbox, so the demo can show both sides of the loop |
 | `/family/respond/[token]` | GET/POST | The family recipient page — bounded reply choices, no account needed |
 
@@ -362,20 +586,3 @@ curl -sS -X POST localhost:3000/api/dev/detect \
 curl -sS localhost:3000/api/dev/family-inbox \
   -H "x-careloop-dev-secret: $S" | jq
 ```
-
-## Layout
-
-| Path | What lives here |
-|---|---|
-| `app/` | Routes and UI. Depends on `server/services`, never on repositories directly. |
-| `core/` | Pure domain: baselines, detection, consent, safety guards, minimization. No I/O, no framework, no database — enforced by ESLint. |
-| `server/services/` | Use-cases that compose repositories, adapters and `core`. |
-| `server/repositories/` | Typed Postgres access, one per aggregate. Every transition is a conditional update. |
-| `server/adapters/` | Ports: LLM, extraction, embeddings, family renderer, notifier, clock. |
-| `server/prompts/` | Versioned prompt files; a prompt change is a behaviour change. |
-| `server/db/` | Supabase client seam and generated types. |
-| `supabase/migrations/` | Schema, RLS and the atomic RPCs. |
-| `fixtures/`, `scripts/` | Demo timeline and the seeder that replays it through the production pipeline. |
-| `tests/` | `unit` (pure core and services), `db` (real Postgres via PGlite), `golden` (recorded extraction). |
-
-Dependency direction: `app → server/services → repositories/adapters → core`.
