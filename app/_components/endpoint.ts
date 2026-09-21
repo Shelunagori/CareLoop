@@ -30,6 +30,16 @@ import {
 
 export type Endpointer = {
   /**
+   * What this watcher has heard so far (M12i).
+   *
+   * Read by the application's backstop, and by nothing else. The backstop
+   * has to tell a silent window from a long one, and only the tracker
+   * knows which it is. It never drives a decision — the watcher still
+   * decides when it can; this is what the application asks when the
+   * watcher has said nothing by the deadline.
+   */
+  inspect(): { decided: EndpointOutcome | null; speechStarted: boolean };
+  /**
    * Releases the analyser, the interval and the audio context. Idempotent,
    * and never throws at a caller: it runs inside other teardowns.
    *
@@ -138,5 +148,11 @@ export function startEndpointing(input: StartEndpointingInput): Endpointer | nul
     input.onDecision(decision);
   }, frameMs);
 
-  return { stop };
+  return {
+    stop,
+    inspect: () => {
+      const view = tracker.inspect();
+      return { decided: view.decided, speechStarted: view.speechStarted };
+    },
+  };
 }

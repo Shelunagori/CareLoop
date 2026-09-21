@@ -59,6 +59,18 @@ export type EndpointBounds = {
   /** The floor's floor, for a silent room where the measured floor is ~0. */
   readonly minThreshold: number;
   /**
+   * How long after a deadline the APPLICATION's own bound fires (M12i).
+   *
+   * The watcher is an optimisation; the bound is the application's. A
+   * follow-up window whose watcher never starts — no Web Audio, an audio
+   * graph that will not construct, a stream with no usable track — or
+   * whose watcher starts and then never reports, was bounded by nothing
+   * at all, while the interface promised a bounded window either way. The
+   * grace exists so that when the watcher IS working it always decides
+   * first, and the backstop is never what a person experiences.
+   */
+  readonly backstopGraceMs: number;
+  /**
    * And its ceiling, for a loud room — or for somebody who starts talking
    * during calibration, which would otherwise measure their voice as silence
    * and make the turn undetectable.
@@ -71,6 +83,7 @@ export const ENDPOINT_BOUNDS: EndpointBounds = {
   minSpeechMs: 200,
   silenceToFinalizeMs: 1_500,
   maxTurnMs: 20_000,
+  backstopGraceMs: 2_000,
   noiseFloorFrames: 5,
   thresholdRatio: 3,
   minThreshold: 0.012,
@@ -95,12 +108,21 @@ export type EndpointTracker = {
    * the first.
    */
   observe(sample: EndpointSample): EndpointOutcome | null;
-  /** For the debug view and the tests. Never shown to a person. */
+  /** For the debug view, the backstop and the tests. Never shown to a person. */
   inspect(): {
     decided: EndpointOutcome | null;
     threshold: number | null;
     speechMs: number;
     silenceMs: number;
+    /**
+     * Whether anything above the threshold has been heard at all (M12i).
+     *
+     * Distinct from `speechMs`, which is zero until a SECOND loud frame
+     * arrives. The application's backstop asks this one question — is
+     * this window silent, or is somebody talking? — so it can end a
+     * silent window without cutting a real turn short.
+     */
+    speechStarted: boolean;
   };
 };
 
@@ -135,6 +157,7 @@ export function createEndpointTracker(
       threshold,
       speechMs: speechMs(),
       silenceMs: silenceMs(),
+      speechStarted: firstLoudAtMs !== null,
     }),
 
     observe({ atMs, rms }) {

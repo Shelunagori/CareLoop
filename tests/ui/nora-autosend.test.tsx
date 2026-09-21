@@ -57,7 +57,18 @@ vi.mock("@/app/_components/endpoint", () => ({
       watcher.stops += 1;
       input.onDecision(outcome);
     };
-    return { stop: () => { watcher.stops += 1; } };
+    return {
+      stop: () => { watcher.stops += 1; },
+      /**
+       * A FAKE THAT HONOURS THE WHOLE CONTRACT (M12i).
+       *
+       * The application's backstop asks a live watcher whether it has
+       * heard anything before deciding a window is silent. A fake missing
+       * this method does not fail a type check — `vi.mock` factories are
+       * untyped — it throws at the deadline, seconds into a test.
+       */
+      inspect: () => ({ decided: null, speechStarted: false }),
+    };
   },
 }));
 

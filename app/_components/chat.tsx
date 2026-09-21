@@ -38,7 +38,7 @@ import { noraState, noraStateHeadline, noraStateLabel, wakeIsArmed } from "@/cor
 import { autoSendDecision, AUTO_SEND_COUNTDOWN_SECONDS } from "@/core/nora/autosend";
 import { composeOpening } from "@/core/opening/greeting";
 import { useLocalHour } from "./local-hour";
-import type { EndpointOutcome } from "@/core/voice/endpoint";
+import { ENDPOINT_BOUNDS, type EndpointOutcome } from "@/core/voice/endpoint";
 
 export type ChatMessage = {
   id: string;
@@ -199,6 +199,12 @@ export function Chat(props: {
     // Somebody who has just closed the microphone has not asked for one
     // more message to go out three seconds later.
     cancelCountdownRef.current();
+    // The watchdog exists to end this burst. Once it has ended, by any
+    // route, there is nothing left for it to do.
+    if (burstWatchdogRef.current !== null) {
+      clearTimeout(burstWatchdogRef.current);
+      burstWatchdogRef.current = null;
+    }
   }, []);
   const endBurstRef = useRef(endBurst);
   endBurstRef.current = endBurst;
@@ -279,6 +285,43 @@ export function Chat(props: {
   const onEndpointRef = useRef<(outcome: EndpointOutcome) => void>(() => {});
   /** The end-of-turn watcher, alive only while a post-wake recording is. */
   const endpointerRef = useRef<Endpointer | null>(null);
+  /**
+   * THE APPLICATION'S OWN BOUND ON AN OPEN WAKE TURN (M12i).
+   *
+   * The watcher is an optimisation. This is the promise. `startEndpointing`
+   * returns null on a browser with no Web Audio, on an audio graph that
+   * will not construct, or on a stream with no usable track — and the
+   * recorder swallows an observer's exceptions on purpose, because a
+   * convenience must never fail a recording. Both are right. What was
+   * wrong is that the interface says "Listening for your reply" and
+   * promises a bounded window, and only the watcher was keeping it.
+   *
+   * Cleared by the same `dropEndpointer` every teardown already calls, and
+   * it ends the turn through the SAME `onEndpointRef` path a real decision
+   * takes — never a second re-arm path.
+   */
+  const backstopRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * AND A BOUND ON THE BURST ITSELF (M12j).
+   *
+   * Recorded on the deployment: the reply finished, "Listening for your
+   * reply" appeared, and the composer kept its plain microphone icon
+   * instead of the Stop control. Twenty-four seconds like that, until
+   * "End voice session" was pressed — after which "Hey Nora" worked at
+   * once.
+   *
+   * The recorder never opened. `beginRecording` awaits `getUserMedia`,
+   * and if the follow-up effect re-runs inside that gap its cleanup sets
+   * `cancelled`, so the abort check releases the microphone and returns
+   * silently: burst live, `followUpOpenedRef` true so nothing retries,
+   * wake detector paused because a burst is never armed.
+   *
+   * The backstop above cannot help, because it is armed AFTER the
+   * microphone opens — the thing that never happened. So the bound has to
+   * belong to the burst: armed when a window is committed to, cleared
+   * when a recording actually opens, and otherwise it ends the burst.
+   */
+  const burstWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /**
    * Whether the recording in flight was started by a wake or by a press.
    * A ref AND a state: callbacks read the ref, the state machine reads the
@@ -490,6 +533,12 @@ export function Chat(props: {
   const dropEndpointer = useCallback(() => {
     endpointerRef.current?.stop();
     endpointerRef.current = null;
+    // The backstop belongs to the same turn as the watcher, so it is
+    // released by the same call every teardown already makes.
+    if (backstopRef.current !== null) {
+      clearTimeout(backstopRef.current);
+      backstopRef.current = null;
+    }
   }, []);
 
   /**
@@ -663,6 +712,77 @@ export function Chat(props: {
   );
   startCountdownRef.current = startCountdown;
 
+  /**
+   * Arms the application's bound on the turn that has just opened (M12i).
+   *
+   * Deliberately NOT a decision-maker: everything it concludes is routed
+   * through `onEndpointRef`, the one path a real watcher decision takes,
+   * so there is still exactly one way a wake turn ends and exactly one
+   * thing that re-arms the engine — the state machine.
+   */
+  const armBackstop = useCallback(() => {
+    if (backstopRef.current !== null) clearTimeout(backstopRef.current);
+
+    const finish = (outcome: EndpointOutcome) => {
+      backstopRef.current = null;
+      // Nothing to end. A watcher decision, a Stop press or a teardown got
+      // here first, and each of those already cleared this timer.
+      if (recordingRef.current === null) return;
+      onEndpointRef.current(outcome);
+    };
+
+    backstopRef.current = setTimeout(() => {
+      const heard = endpointerRef.current?.inspect().speechStarted ?? false;
+      if (!heard) {
+        // Silent, or deaf. Either way the window is over, and the person
+        // sees the same "I didn't catch that" a watcher would have given
+        // them — which is true in both cases.
+        finish("no_speech");
+        return;
+      }
+      // Somebody is talking. The watcher owns this turn now, and the only
+      // thing left to guarantee is that it cannot run forever.
+      backstopRef.current = setTimeout(
+        () => finish("max_duration"),
+        ENDPOINT_BOUNDS.maxTurnMs - ENDPOINT_BOUNDS.speechStartTimeoutMs,
+      );
+    }, ENDPOINT_BOUNDS.speechStartTimeoutMs + ENDPOINT_BOUNDS.backstopGraceMs);
+  }, []);
+  const armBackstopRef = useRef(armBackstop);
+  armBackstopRef.current = armBackstop;
+
+  /**
+   * Arms the bound on the BURST, from the moment a window is committed to
+   * (M12j).
+   *
+   * This is the one that answers the screen recording. It does not care
+   * why no microphone arrived — an aborted open, a permission dialog
+   * nobody answered, a `getUserMedia` that never settles — only that the
+   * page must not go on saying "Listening for your reply" with nothing
+   * behind it. If a recording is open by the deadline, the backstop above
+   * owns the turn and this has already been cleared.
+   */
+  const armBurstWatchdog = useCallback(() => {
+    /**
+     * Armed once per burst, never extended. A retried window must not be
+     * able to push the deadline out in front of itself — the bound is on
+     * the BURST, and the whole point is that it cannot be outrun.
+     */
+    if (burstWatchdogRef.current !== null) return;
+    burstWatchdogRef.current = setTimeout(() => {
+      burstWatchdogRef.current = null;
+      if (!inBurstRef.current) return;
+      if (recordingRef.current !== null) return;
+      // Silently: nothing was heard because nothing was ever listening,
+      // and an apology for a failure the person did not cause and cannot
+      // see would only confuse them. The burst ends, the state machine
+      // re-arms the wake word, and the page says so.
+      endBurstRef.current();
+    }, ENDPOINT_BOUNDS.speechStartTimeoutMs + ENDPOINT_BOUNDS.backstopGraceMs);
+  }, []);
+  const armBurstWatchdogRef = useRef(armBurstWatchdog);
+  armBurstWatchdogRef.current = armBurstWatchdog;
+
   const beginRecording = useCallback(
     async (
       source: "press" | "wake" = "press",
@@ -726,8 +846,40 @@ export function Chat(props: {
         recordingRef.current = null;
         opened?.cancel();
         markWakeTurn(false);
+        /**
+         * NOTHING IS RESET HERE, AND THAT IS DELIBERATE (M12j).
+         *
+         * An earlier draft of this fix cleared `followUpOpenedRef` so a
+         * cancelled window could be retried. It was removed because no
+         * reachable trigger for it could be constructed: the only
+         * dependency of the follow-up effect that can change while the
+         * microphone is opening is the composer's contents, and typing
+         * already ends the burst by design. Speculative recovery for a
+         * path nothing can reach is code that cannot be tested and will
+         * not be maintained. The burst watchdog bounds this case either
+         * way.
+         */
         return;
       }
+      /**
+       * THE WINDOW IS NOW BOUNDED BY THE APPLICATION (M12i).
+       *
+       * Armed after the abort check, so a window that closed while the
+       * microphone was opening never leaves a timer behind, and only for
+       * a wake turn: push-to-talk is bounded by the person's own hand on
+       * Stop, and by the recorder's ceiling behind that.
+       *
+       * The burst watchdog is released in the same breath — a microphone
+       * did arrive, which is the only thing it was waiting for.
+       */
+      if (source === "wake") {
+        if (burstWatchdogRef.current !== null) {
+          clearTimeout(burstWatchdogRef.current);
+          burstWatchdogRef.current = null;
+        }
+        armBackstopRef.current();
+      }
+
       // From here on this person hears replies. Nothing plays before they
       // have asked for voice at least once.
       setVoiceModeOn(true);
@@ -1157,6 +1309,9 @@ export function Chat(props: {
     if (!noraOn || !noraAvailable || noraRef.current === null) return;
 
     followUpOpenedRef.current = true;
+    // Committed. From here the page says "Listening for your reply", so
+    // from here something has to guarantee that it stops saying it (M12j).
+    armBurstWatchdogRef.current();
     let cancelled = false;
     void (async () => {
       /**
