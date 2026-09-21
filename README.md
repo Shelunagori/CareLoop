@@ -522,15 +522,28 @@ surfaced were kept: the consent qualifier rule, the pinned transcription
 language, empty-transcript safety, and the distinction between "I didn't catch
 that" and "that recording failed".
 
-M12 brought it back on different terms, and the terms are the point. Nora is
-**off by default**, it ends on a date the **server** decides rather than the
-browser, and there is no always-open session — a wake starts one bounded turn,
-which ends on silence, on a maximum duration, or on the Stop button. The
+M12 brought it back on different terms, and the terms are the point. Nora
+ends on a date the **server** decides rather than the browser, and there is
+no always-open session — a wake starts one bounded turn, which ends on
+silence, on a maximum duration, or on the Stop button. The
 arming state is derived from one value, so the interface cannot say
 "Listening" while the detector is paused, and the detector is never armed
 while CareLoop is speaking or while an unsent transcript is waiting.
 Push-to-talk remains the path that always works, and a build without a wake
 key simply has no Nora control.
+
+M12h changed two defaults, both in the same direction: Nora is **on by
+default** (a hands-free companion that has to be switched on by hand every
+visit is one nobody uses), and a wake-word transcript **sends itself after
+three seconds** unless the person cancels. Neither loosens who decides. The
+server is still asked on every load and its refusal still wins; the browser
+still decides about the microphone and a refusal there is a normal answer;
+the toggle is still there and turning it off is remembered. And auto-send
+stops dead at the one place it must: while a card offering to message
+somebody's family is on screen, nothing sends itself — consent stays the
+person's hand on Send. It also stays out of the two places it would be
+guessing: a one- or two-word transcript, where transcription is least
+reliable, and a recording the person pressed for themselves.
 
 #### Voice scope and a production path
 
@@ -542,7 +555,10 @@ push-to-talk ─┐
 "Hey Nora" ───┘        (bounded turn, ends on silence or a limit)
               →  transcript appears as editable composer text,
                  labelled as having come from speech
-              →  explicit submission by the person
+              →  submitted by the person, or by a 3-second countdown
+                 the person can cancel — never when a family offer
+                 is on screen, never under three words, never after
+                 a pressed recording
               →  the existing conversation pipeline
               →  optional ElevenLabs speech output
 ```

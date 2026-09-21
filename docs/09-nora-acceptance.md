@@ -237,6 +237,55 @@ Say nothing in a follow-up window: the burst ends and the page returns to
 **Waiting for "Hey Nora"**. **End voice session** does the same at any point,
 and Nora stays on.
 
+### G — on by default, and the sentence that sends itself (M12h)
+
+Two defaults changed. Both have to be checked in a browser, because both
+are about what happens to somebody who does nothing.
+
+**G1 — a cold load, with no microphone permission yet.** Use a fresh
+profile or clear the site's permissions first. Open the page and touch
+nothing. Expected: the browser's microphone prompt appears on its own, and
+on **Allow** the panel reads **Waiting for "Hey Nora"** with the toggle
+already on — no click anywhere. On **Block**: the toggle reads off, the
+note explains that Nora couldn't start, the microphone button still works,
+and nothing is written to `localStorage` (so granting permission later and
+reloading is enough).
+
+> **This is the step that cannot be proved in the test suite.** Porcupine
+> runs on Web Audio, and an `AudioContext` created without user activation
+> can start **suspended** — which would leave the panel saying "Waiting for
+> Hey Nora" while nothing is listening, the exact class of defect M12g was.
+> So G1 is not "the toggle says on"; it is **say "Hey Nora" and have it
+> wake, on a load where nothing has been clicked**. If it does not, the
+> honest fallback is to arm on the first interaction instead, and that is
+> a decision to bring back rather than to paper over.
+
+**G2 — a returning visitor.** Reload with permission already granted:
+armed, silently, no prompt. Turn the toggle off, reload: still off. Turn
+it back on, reload: armed again.
+
+**G3 — the sentence that sends itself.** With Nora on:
+
+```
+"Hey Nora"  →  "tell me about the weather"  →  transcript appears
+→  the panel counts "Sending in 3… 2… 1…" with a Cancel button
+→  it sends on its own, and the reply is read out
+```
+
+Then each of the four ways it must NOT happen:
+
+| Do this | Expected |
+|---|---|
+| Press **Cancel** during the count | The words stay in the composer, the panel returns to **Message ready**, nothing is sent |
+| Start editing a word during the count | Same — correcting a mis-heard word is the commonest reason to stop one |
+| Say **"yes"** or any one- or two-word answer | No countdown at all; the words wait for Send |
+| Press the microphone button instead of waking | No countdown; push-to-talk is unchanged |
+
+**G4 — the one that matters most.** Get a reconnect or wellbeing card on
+screen (§A3 A or C), then say something with Nora. Expected: **no
+countdown, ever**, whatever was said. A spoken answer to a card that would
+message somebody's family is always sent by the person's own hand.
+
 ## A. Wake reliability — 20 intended attempts
 
 Normal speaking voice, normal room, one device. Say "Nora", wait for

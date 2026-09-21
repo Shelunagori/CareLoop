@@ -114,6 +114,15 @@ async function wake() {
 
 beforeEach(() => {
   window.localStorage.clear();
+  /**
+   * These tests arm Nora BY HAND, so they start from off (M12h).
+   *
+   * Nora is on by default now. The sections below are about what the
+   * engine does once it is armed, and they say so by clicking the toggle
+   * — which only means anything if it starts off. The DEFAULT itself is
+   * tested in §1, which clears this key.
+   */
+  window.localStorage.setItem("careloop.nora", "off");
   vi.stubEnv("NEXT_PUBLIC_PICOVOICE_ACCESS_KEY", "pv-key");
   vi.stubEnv("NEXT_PUBLIC_NORA_KEYWORD_PATH", "/nora/Nora.ppn");
   status.value = { available: true, reason: null, availableUntil: "2026-09-25T23:59:59.999Z" };

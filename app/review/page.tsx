@@ -642,11 +642,11 @@ function Learnings() {
     {
       title: "A wake word, removed and then earned back",
       observed:
-        "A first wake-word attempt was not reliable enough for a dependable product experience, so it was removed and push-to-talk kept. A later attempt — “Hey Nora”, off by default, with a server-authoritative expiry date — behaved well enough in a real browser to stand.",
+        "A first wake-word attempt was not reliable enough for a dependable product experience, so it was removed and push-to-talk kept. A later attempt — “Hey Nora”, with a server-authoritative expiry date — behaved well enough in a real browser to stand, and is now on by default.",
       issue:
         "Keeping the first one behind a flag would have meant shipping a feature nobody could trust. Shipping the second without a bound would have meant a demo that quietly outlives the licence it runs on.",
       change:
-        "Nora is opt-in, ends on a date the server decides rather than the browser, and leaves push-to-talk as the path that always works. Four general correctness fixes the first attempt surfaced were kept either way.",
+        "Nora ends on a date the server decides rather than the browser, and leaves push-to-talk as the path that always works. It arms itself on load, because a hands-free companion that has to be switched on by hand every visit is one nobody uses — but the server is still asked every time, the browser still decides about the microphone, and turning it off is remembered. A spoken sentence now also sends itself after three seconds unless cancelled, except while a family offer is on screen, where consent stays the person’s own act. Four general correctness fixes the first attempt surfaced were kept either way.",
     },
     {
       title: "A family matter raised in the middle of small talk",

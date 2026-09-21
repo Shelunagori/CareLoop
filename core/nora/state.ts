@@ -55,6 +55,20 @@ export type NoraState =
   | "draft_ready"
   /** The person's own text is in the composer. Nora does not interrupt it. */
   | "paused_for_typing"
+  /**
+   * A TRANSCRIPT IS COUNTING DOWN TO SEND ITSELF (M12h).
+   *
+   * Auto-send gives the person a few seconds to stop it. For those
+   * seconds the words are in the composer, which without this state
+   * reads as `draft_ready` — "Message ready. Send or clear it to carry
+   * on." That sentence becomes false the moment a timer is running:
+   * nobody has to send it, and ignoring it will not leave it alone.
+   *
+   * NOT ARMED, for the same reason `draft_ready` is not: a second wake
+   * in the last three seconds would overwrite words already on their
+   * way. This is the M12 draft bug with a timer attached.
+   */
+  | "sending_shortly"
   /** A turn is being sent. */
   | "busy";
 
@@ -101,6 +115,15 @@ export type NoraInputs = {
    * architecture, speaking and listening are mutually exclusive.
    */
   speaking: boolean;
+  /**
+   * Seconds left before a transcript sends itself, or null when no
+   * countdown is running (M12h).
+   *
+   * The SHELL owns the timer — this file has no clock and never will. It
+   * owns what the countdown means: which state it is, that it outranks a
+   * resting draft, and that nothing is armed while it runs.
+   */
+  countdownSeconds: number | null;
 };
 
 /**
@@ -140,6 +163,15 @@ export function noraState(input: NoraInputs): NoraState {
    * there is nothing for it to pause, and announcing a pause of something
    * that does not exist is noise.
    */
+  /**
+   * A COUNTDOWN OUTRANKS THE DRAFT IT IS COUNTING DOWN.
+   *
+   * Below the recorder and `sending` checks on purpose: those are things
+   * happening in the room, and if the shell ever failed to clear a timer
+   * when a new recording started, what is actually happening still wins.
+   */
+  if (typeof input.countdownSeconds === "number") return "sending_shortly";
+
   if (input.composerHasText && input.draftFromVoice) return "draft_ready";
 
   if (!input.configured) return "off";
@@ -211,6 +243,10 @@ export function noraStateLabel(state: NoraState): string | null {
       return "Nora is paused while your message is waiting. Send or clear it to carry on.";
     case "paused_for_typing":
       return "Nora is paused while you have a message waiting.";
+    case "sending_shortly":
+      // No number here. The headline carries the count; a sentence that
+      // also said "three" would be wrong for two of the three seconds.
+      return "I'll send this in a moment — press Cancel if you'd rather change it.";
     case "busy":
       return "Sending…";
   }
@@ -227,8 +263,21 @@ export function noraStateLabel(state: NoraState): string | null {
  * machine. "Working out what you said" is what transcription is; a person
  * does not need the word.
  */
-export function noraStateHeadline(state: NoraState): string | null {
+export function noraStateHeadline(
+  state: NoraState,
+  /**
+   * Seconds left, for the one state that has a number in it. Optional so
+   * every other caller is untouched, and null-tolerant because a missing
+   * number is a shell bug that must not print "Sending in null…" at
+   * somebody.
+   */
+  countdownSeconds: number | null = null,
+): string | null {
   switch (state) {
+    case "sending_shortly":
+      return countdownSeconds === null
+        ? "Sending your message"
+        : `Sending in ${countdownSeconds}…`;
     case "waiting_for_wake":
       return 'Waiting for "Hey Nora"';
     case "listening":

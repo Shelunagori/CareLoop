@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   noraState,
+  noraStateHeadline,
   noraStateLabel,
   wakeIsArmed,
   type NoraInputs,
@@ -29,6 +30,7 @@ const base: NoraInputs = {
   sending: false,
   speaking: false,
   inBurst: false,
+  countdownSeconds: null,
 };
 
 const at = (overrides: Partial<NoraInputs> = {}): NoraState =>
@@ -45,6 +47,7 @@ const EVERY_STATE: NoraState[] = [
   "speaking",
   "draft_ready",
   "paused_for_typing",
+  "sending_shortly",
   "busy",
 ];
 
@@ -161,12 +164,13 @@ describe("5. the whole input space, brute-forced", () => {
                   for (const draftFromVoice of bools)
                     for (const sending of bools)
                     for (const speaking of bools)
-                    for (const inBurst of bools) {
+                    for (const inBurst of bools)
+                    for (const countdownSeconds of [null, 3]) {
                       total += 1;
                       const inputs: NoraInputs = {
                         configured, available, enabled, starting,
                         recorder, wakeTurn, composerHasText, draftFromVoice, sending,
-                        speaking, inBurst,
+                        speaking, inBurst, countdownSeconds,
                       };
                       if (!wakeIsArmed(noraState(inputs))) continue;
                       armedCount += 1;
@@ -185,11 +189,71 @@ describe("5. the whole input space, brute-forced", () => {
                        * is the thing this file exists to prevent.
                        */
                       expect(inputs.inBurst).toBe(false);
+                      /**
+                       * M12h. A transcript counting down to send itself is
+                       * about to become a turn. Arming there would let a
+                       * second wake overwrite it in the last three seconds
+                       * — the M12 draft bug with a timer attached.
+                       */
+                      expect(inputs.countdownSeconds).toBeNull();
                     }
 
     expect(total).toBeGreaterThan(1000);
     // And it is reachable — a rule nothing satisfies is not a rule.
     expect(armedCount).toBeGreaterThan(0);
+  });
+});
+
+describe("5b. a transcript counting down to send itself (M12h)", () => {
+  /**
+   * Auto-send gives the person three seconds to stop it. For those three
+   * seconds the transcript is in the composer, which today reads as
+   * `draft_ready` — "Message ready. Send or clear it to carry on." That
+   * sentence is now false: nobody has to send it, and in three seconds
+   * nobody can stop it by ignoring it.
+   *
+   * The state exists so the interface and the engine cannot disagree about
+   * that window. Both of the last two live bugs were exactly that
+   * disagreement.
+   */
+  it("outranks the resting draft", () => {
+    expect(at({ composerHasText: true, draftFromVoice: true })).toBe("draft_ready");
+    expect(
+      at({ composerHasText: true, draftFromVoice: true, countdownSeconds: 3 }),
+    ).toBe("sending_shortly");
+  });
+
+  it("is not armed", () => {
+    expect(wakeIsArmed("sending_shortly")).toBe(false);
+  });
+
+  it("counts down in the headline, because the number is the whole point", () => {
+    expect(noraStateHeadline("sending_shortly", 3)).toBe("Sending in 3…");
+    expect(noraStateHeadline("sending_shortly", 1)).toBe("Sending in 1…");
+  });
+
+  it("says how to stop it, without naming a number that would go stale", () => {
+    expect(noraStateLabel("sending_shortly")).toContain("Cancel");
+  });
+
+  it("never claims a countdown it was given no number for", () => {
+    // Defensive: the shell owns the timer, so a state without a number is a
+    // shell bug. It must not print "Sending in null…" at somebody.
+    expect(noraStateHeadline("sending_shortly")).toBe("Sending your message");
+  });
+
+  it("the other headlines ignore the number entirely", () => {
+    for (const state of EVERY_STATE) {
+      if (state === "sending_shortly") continue;
+      expect(noraStateHeadline(state, 2), state).toBe(noraStateHeadline(state));
+    }
+  });
+
+  it("a live recorder still outranks it", () => {
+    // The countdown is cleared when a new recording starts; if the shell
+    // ever fails to, what is happening in the room still wins.
+    expect(at({ recorder: "recording", wakeTurn: true, countdownSeconds: 3 })).toBe("listening");
+    expect(at({ sending: true, countdownSeconds: 3 })).toBe("busy");
   });
 });
 

@@ -109,6 +109,15 @@ beforeEach(() => {
   // A remembered preference must not leak between tests: it is the input to
   // the auto-arm path, and half of what "preference is not permission" means.
   window.localStorage.clear();
+  /**
+   * These tests arm Nora BY HAND, so they start from off (M12h).
+   *
+   * Nora is on by default now. The sections below are about what the
+   * engine does once it is armed, and they say so by clicking the toggle
+   * — which only means anything if it starts off. The DEFAULT itself is
+   * tested in §1, which clears this key.
+   */
+  window.localStorage.setItem("careloop.nora", "off");
   vi.stubEnv("NEXT_PUBLIC_PICOVOICE_ACCESS_KEY", "pv-key");
   vi.stubEnv("NEXT_PUBLIC_NORA_KEYWORD_PATH", "/nora/Nora.ppn");
   status.value = {
@@ -124,12 +133,77 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("1. off by default, and unoffered when unconfigured", () => {
-  it("is off on every load", async () => {
+describe("1. ON by default, and unoffered when unconfigured", () => {
+  /**
+   * M12h REVERSED THE DEFAULT.
+   *
+   * Nora shipped off-by-default because it was an experiment, and an
+   * experiment that opens a microphone should be asked for. It is no
+   * longer an experiment, and the person it is for is somebody who may
+   * not find a toggle at all — a hands-free companion that has to be
+   * switched on by hand each visit is a hands-free companion nobody uses.
+   *
+   * What did NOT change is who decides. The server is still asked on
+   * every load and its refusal still wins; the browser still decides
+   * about the microphone; and the toggle is still there, still
+   * remembered. "On by default" means the answer to a question nobody
+   * answered — not an override of anybody who did.
+   *
+   * The test this replaces asserted the old default. It is replaced
+   * rather than adjusted, for the reason §5 gives: a test written to
+   * behaviour that has been deliberately removed is not a regression
+   * test, it is a fossil.
+   */
+  it("arms itself on load, with nothing to click", async () => {
+    window.localStorage.removeItem("careloop.nora");
+    render(<Chat initialConversationId="c" initialMessages={[]} />);
+    await waitFor(() => expect(engine.starts).toBe(1));
+    expect(toggle().getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("honours somebody who turned it off", async () => {
+    window.localStorage.setItem("careloop.nora", "off");
     render(<Chat initialConversationId="c" initialMessages={[]} />);
     await waitFor(() => expect(toggle()).toBeTruthy());
-    expect(toggle().getAttribute("aria-checked")).toBe("false");
+    // Given every chance to arm late.
+    await waitFor(() => expect(screen.getByText(/Say .Hey Nora. to start/i)).toBeTruthy());
     expect(engine.starts).toBe(0);
+    expect(toggle().getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("turning it off writes that down, so the next load agrees", async () => {
+    window.localStorage.removeItem("careloop.nora");
+    render(<Chat initialConversationId="c" initialMessages={[]} />);
+    await waitFor(() => expect(engine.starts).toBe(1));
+    fireEvent.click(toggle());
+    await waitFor(() => expect(toggle().getAttribute("aria-checked")).toBe("false"));
+    expect(window.localStorage.getItem("careloop.nora")).toBe("off");
+  });
+
+  it("the server still outranks the default", async () => {
+    // Nobody asked for this one either, which is exactly why the cutoff
+    // has to hold: an expired experiment must not arm itself.
+    status.value = { available: false, reason: "expired", availableUntil: "2026-09-25T23:59:59.999Z" };
+    window.localStorage.removeItem("careloop.nora");
+    render(<Chat initialConversationId="c" initialMessages={[]} />);
+    await waitFor(() => expect(screen.getByText(/no longer available/i)).toBeTruthy());
+    expect(engine.starts).toBe(0);
+    expect(toggle().getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("a microphone the browser refuses leaves it off, and says why", async () => {
+    // Declining the permission prompt is a normal answer, not a fault. The
+    // person is told plainly, the toggle reads off, and push-to-talk — the
+    // permanent fallback — is untouched.
+    engine.failWith = "initialization_failed";
+    window.localStorage.removeItem("careloop.nora");
+    render(<Chat initialConversationId="c" initialMessages={[]} />);
+    await waitFor(() => expect(screen.getByText(/Nora couldn't start/)).toBeTruthy());
+    expect(toggle().getAttribute("aria-checked")).toBe("false");
+    expect(mic()).toBeTruthy();
+    // And it is NOT written down as a preference: granting the microphone
+    // later must be enough, without finding the toggle.
+    expect(window.localStorage.getItem("careloop.nora")).toBeNull();
   });
 
   it("is not offered at all when this build carries no Picovoice configuration", async () => {
@@ -297,6 +371,17 @@ describe("5. a wake turn, and the draft that must stand the detector down", () =
     engine.onWake();
   };
 
+  /**
+   * Finish the recording and bring the turn to REST.
+   *
+   * M12h added the step in the middle: a wake transcript now counts down
+   * to send itself, so a draft only sits unresolved once the person has
+   * said no to that. Cancel is how they say it, and everything below is
+   * about what happens after they have — the detector must stay down for a
+   * draft nobody has dealt with, exactly as before.
+   *
+   * The countdown's own behaviour is tested in `nora-autosend.test.tsx`.
+   */
   const finishTurn = async () => {
     fireEvent.click(await screen.findByRole("button", { name: /stop recording/i }));
     await waitFor(() =>
@@ -304,6 +389,7 @@ describe("5. a wake turn, and the draft that must stand the detector down", () =
         "how is John",
       ),
     );
+    fireEvent.click(await screen.findByRole("button", { name: /^cancel$/i }));
   };
 
   it("pauses wake detection while it records, rather than listening twice", async () => {
@@ -312,11 +398,24 @@ describe("5. a wake turn, and the draft that must stand the detector down", () =
     expect(await screen.findByRole("button", { name: /stop recording/i })).toBeTruthy();
   });
 
-  it("puts the transcript in the composer and sends nothing", async () => {
+  it("puts the transcript in the composer BEFORE anything is sent", async () => {
+    /**
+     * M12h. The transcript may now send itself after a few seconds, so
+     * "sends nothing" is no longer true forever — what is still true, and
+     * what this asserts, is the ORDER: the words are on screen, and
+     * cancellable, before any of them leave the browser.
+     */
     await wake();
-    await finishTurn();
+    fireEvent.click(await screen.findByRole("button", { name: /stop recording/i }));
+    await waitFor(() =>
+      expect((screen.getByLabelText(/write a message/i) as HTMLTextAreaElement).value).toBe(
+        "how is John",
+      ),
+    );
     const chatCalls = (globalThis.fetch as unknown as { mock: { calls: string[][] } }).mock.calls;
     expect(chatCalls.some((c) => c[0] === "/api/chat")).toBe(false);
+    // And the way out is offered in the same breath as the countdown.
+    expect(await screen.findByRole("button", { name: /^cancel$/i })).toBeTruthy();
   });
 
   it("does NOT re-arm while the transcript is unresolved", async () => {

@@ -35,6 +35,7 @@ import { recoveryText } from "./recovery";
 import { NORA_MODEL_PATH } from "@/core/nora/config";
 import type { NoraUnavailableReason } from "@/core/nora/availability";
 import { noraState, noraStateHeadline, noraStateLabel, wakeIsArmed } from "@/core/nora/state";
+import { autoSendDecision, AUTO_SEND_COUNTDOWN_SECONDS } from "@/core/nora/autosend";
 import { composeOpening } from "@/core/opening/greeting";
 import { useLocalHour } from "./local-hour";
 import type { EndpointOutcome } from "@/core/voice/endpoint";
@@ -194,6 +195,10 @@ export function Chat(props: {
     inBurstRef.current = false;
     setInBurst(false);
     cancelBurstRecordingRef.current();
+    // Leaving the voice session leaves the countdown with it (M12h).
+    // Somebody who has just closed the microphone has not asked for one
+    // more message to go out three seconds later.
+    cancelCountdownRef.current();
   }, []);
   const endBurstRef = useRef(endBurst);
   endBurstRef.current = endBurst;
@@ -226,6 +231,35 @@ export function Chat(props: {
     setSpeechRate(speechRateRef.current);
   }, []);
   const recordingRef = useRef<Recording | null>(null);
+
+  /**
+   * THE AUTO-SEND COUNTDOWN (M12h).
+   *
+   * Seconds remaining, or null when nothing is counting. A spoken sentence
+   * sends itself after `AUTO_SEND_COUNTDOWN_SECONDS`; `core/nora/autosend.ts`
+   * decides whether it may, and this is the window in which the person can
+   * say no.
+   *
+   * The timer lives in a ref and the number in state, because those are two
+   * different things: one is a resource to release, the other is something
+   * to render. Every path that releases the timer goes through
+   * `cancelCountdownRef`, so there is exactly one place that can leave one
+   * running.
+   */
+  const [countdown, setCountdown] = useState<number | null>(null);
+  const countdownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const cancelCountdownRef = useRef<() => void>(() => {});
+  const startCountdownRef = useRef<(text: string) => void>(() => {});
+  /**
+   * The current offer and the current `send`, mirrored for the timer to
+   * read WHEN IT FIRES rather than when it was scheduled.
+   *
+   * Assigned during render, like `cancelBurstRecordingRef` above. A timer
+   * that closed over either would be acting on a three-second-old picture
+   * of the page.
+   */
+  const offerRef = useRef<PendingOffer | null>(null);
+  const sendRef = useRef<(text: string) => void>(() => {});
 
   /**
    * NORA — the optional wake word.
@@ -307,6 +341,10 @@ export function Chat(props: {
     async (rawText: string, consent: ConsentPending = null) => {
       const text = rawText.trim();
       if (!text || status === "sending") return;
+
+      // A manual Send during a countdown is the person getting there first.
+      // Without this the timer would fire into an already-sent turn.
+      cancelCountdownRef.current();
 
       setError(null);
       setOpeningDismissed(true);
@@ -455,6 +493,29 @@ export function Chat(props: {
   }, []);
 
   /**
+   * Stops a countdown, whoever stopped it and for whatever reason.
+   *
+   * Idempotent, and safe to call when nothing is running — which is why
+   * every cancellation path can call it without first asking whether there
+   * is anything to cancel.
+   */
+  const cancelCountdown = useCallback(() => {
+    if (countdownTimerRef.current !== null) {
+      clearInterval(countdownTimerRef.current);
+      countdownTimerRef.current = null;
+    }
+    setCountdown(null);
+  }, []);
+  cancelCountdownRef.current = cancelCountdown;
+  // Mirrors, assigned every render, so the timer reads the page as it is
+  // when it fires rather than as it was when it was scheduled.
+  offerRef.current = offer;
+  sendRef.current = (text: string) => void send(text);
+
+  /** Releases a running countdown when the page goes away. */
+  useEffect(() => cancelCountdown, [cancelCountdown]);
+
+  /**
    * Ends a recording and throws the audio away.
    *
    * The no-speech path. Nothing is transcribed, nothing reaches the
@@ -463,6 +524,7 @@ export function Chat(props: {
    */
   const cancelRecording = useCallback(
     (note: string | null) => {
+      cancelCountdownRef.current();
       dropEndpointer();
       const recording = recordingRef.current;
       recordingRef.current = null;
@@ -505,9 +567,27 @@ export function Chat(props: {
       // they do, the wake detector stays down — see core/nora/state.ts.
       // Any transcript, not only a wake one: a pressed recording also
       // leaves words CareLoop heard rather than words they typed.
-      void wasWake;
       draftFromVoiceRef.current = true;
       composerRef.current?.focus();
+
+      /**
+       * AND THEN IT MAY SEND ITSELF (M12h).
+       *
+       * The composer is still filled first, and the focus still moves
+       * there: the countdown is an offer to save the person a button, not
+       * a refusal to let them have one. Editing a word cancels it, which
+       * is why the words have to be there to edit.
+       *
+       * The rule is in `core/nora/autosend.ts` — no offer on the table, a
+       * transcript long enough to trust, and a wake turn rather than a
+       * press.
+       */
+      const decision = autoSendDecision({
+        text,
+        offerPending: offerRef.current !== null,
+        wakeTurn: wasWake,
+      });
+      if (decision.send) startCountdownRef.current(text);
     } catch (error) {
       // Two different apologies, because they are two different situations.
       // "I didn't catch that" tells the person to speak again; it must not be
@@ -539,6 +619,50 @@ export function Chat(props: {
     }
   }, [dropEndpointer, markWakeTurn]);
 
+  /**
+   * Starts the countdown, and fires the send at the end of it.
+   *
+   * The tick and the send both happen in the INTERVAL CALLBACK rather than
+   * in an effect keyed on the number. An effect that set state on its own
+   * output would be the cascade that produced the stuck follow-up window
+   * in M12g, and `react-hooks/set-state-in-effect` is right to refuse it.
+   *
+   * `left` is a local, so the interval does not depend on reading back the
+   * state it just set.
+   */
+  const startCountdown = useCallback(
+    (text: string) => {
+      cancelCountdownRef.current();
+      let left = AUTO_SEND_COUNTDOWN_SECONDS;
+      setCountdown(left);
+      countdownTimerRef.current = setInterval(() => {
+        left -= 1;
+        if (left > 0) {
+          setCountdown(left);
+          return;
+        }
+        cancelCountdownRef.current();
+        /**
+         * CHECKED AGAIN, AT THE MOMENT IT MATTERS.
+         *
+         * Three seconds is long enough for the page to have changed. If a
+         * card asking to message somebody's family is on screen now, this
+         * is not a turn that may send itself, whatever was true when the
+         * timer started. Defence in depth: the server refuses an answer to
+         * a card nobody was shown (M12g), and this refuses to send one
+         * unasked.
+         */
+        if (offerRef.current !== null) {
+          composerRef.current?.focus();
+          return;
+        }
+        sendRef.current(text);
+      }, 1000);
+    },
+    [],
+  );
+  startCountdownRef.current = startCountdown;
+
   const beginRecording = useCallback(
     async (
       source: "press" | "wake" = "press",
@@ -554,6 +678,8 @@ export function Chat(props: {
        */
       shouldAbort?: () => boolean,
     ) => {
+    // A new recording supersedes whatever was about to send itself.
+    cancelCountdownRef.current();
     setError(null);
     setVoiceNote(null);
     stopSpeaking();
@@ -638,6 +764,7 @@ export function Chat(props: {
    * so calling this twice is not a bug — leaving a listener behind once is.
    */
   const teardownNora = useCallback(async () => {
+    cancelCountdownRef.current();
     // The burst goes with the engine. Toggling Nora off, the cutoff
     // passing, an engine failure and a revalidation that comes back
     // unavailable all arrive here, and none of them may leave a follow-up
@@ -851,9 +978,34 @@ export function Chat(props: {
    * What the server says, on load. Fetched even when Nora is off, because it
    * is what decides whether the control may be offered at all.
    *
-   * A remembered ON is honoured only when the server agrees AND the browser
-   * already holds microphone permission. Restoring a preference must not
-   * make a permission prompt appear at somebody who has just opened a page.
+   * ON BY DEFAULT (M12h). Nora arms itself unless somebody turned it off.
+   *
+   * It shipped off-by-default because it was an experiment, and an
+   * experiment that opens a microphone should be asked for. It is not an
+   * experiment now, and the person it is for may never find a toggle: a
+   * hands-free companion that has to be switched on by hand every visit
+   * is a hands-free companion nobody uses.
+   *
+   * WHAT DID NOT CHANGE IS WHO DECIDES. The server is still asked here, on
+   * every load, and its refusal still ends it. The browser still decides
+   * about the microphone, and a refusal there is a normal answer. The
+   * toggle is still there and is still remembered. "On by default" is the
+   * answer to a question nobody answered — never an override of somebody
+   * who did.
+   *
+   * THE PERMISSION QUERY IS GONE, deliberately. It was here so that
+   * restoring a preference could not make a prompt appear at somebody who
+   * had just opened a page — but a prompt is now exactly what should
+   * happen on a first visit, because the alternative is a wake word that
+   * silently does nothing until the person discovers a control. It also
+   * closes P4: Safari does not implement the `microphone` permission
+   * descriptor, so the query threw there and the preference never
+   * restored. We stop asking a question one browser cannot answer.
+   *
+   * A FAILED AUTO-ARM IS NOT WRITTEN DOWN. Declining the prompt leaves the
+   * toggle off with the note explaining it, and nothing in storage — so
+   * granting the microphone later is enough on the next load, without
+   * having to find the toggle to undo something they never chose.
    */
   useEffect(() => {
     if (!noraPossible) return;
@@ -864,24 +1016,15 @@ export function Chat(props: {
       setNoraStatus(status);
       if (!status.available) return;
 
-      let remembered = false;
+      let turnedOff = false;
       try {
-        remembered = window.localStorage.getItem("careloop.nora") === "on";
+        turnedOff = window.localStorage.getItem("careloop.nora") === "off";
       } catch {
-        remembered = false;
+        // Blocked storage is not a preference. Default applies.
+        turnedOff = false;
       }
-      if (!remembered || !noraBrowserSupported()) return;
-
-      let alreadyGranted = false;
-      try {
-        const permission = await navigator.permissions?.query({
-          name: "microphone" as PermissionName,
-        });
-        alreadyGranted = permission?.state === "granted";
-      } catch {
-        alreadyGranted = false;
-      }
-      if (!cancelled && alreadyGranted) void enableNora();
+      if (turnedOff || !noraBrowserSupported()) return;
+      if (!cancelled) void enableNora();
     })();
     return () => {
       cancelled = true;
@@ -921,6 +1064,7 @@ export function Chat(props: {
     // other arm — not through a resume() bolted onto the audio's onended.
     speaking,
     inBurst,
+    countdownSeconds: countdown,
   });
   const armed = wakeIsArmed(nora);
   // A pure mirror of a derived value, for the wake callback to read without
@@ -1116,7 +1260,7 @@ export function Chat(props: {
    * the panel is not rendered at all — an empty state announced loudly is
    * still noise.
    */
-  const voiceHeadline = noraStateHeadline(nora);
+  const voiceHeadline = noraStateHeadline(nora, countdown);
 
   /**
    * The opening survives only until the person says anything.
@@ -1244,7 +1388,26 @@ export function Chat(props: {
                 : "border-[var(--color-line)] bg-[var(--color-surface-muted)]"
             }`}
           >
-            <p className="text-[1.25rem] leading-snug font-semibold">{voiceHeadline}</p>
+            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+              <p className="text-[1.25rem] leading-snug font-semibold">{voiceHeadline}</p>
+              {/*
+                THE WAY OUT OF AN AUTO-SEND (M12h).
+
+                In the panel rather than beside the composer, because the
+                panel is where the countdown is being announced and a
+                person should not have to look in two places to stop one
+                thing. Full height, so it is reachable without precision.
+              */}
+              {nora === "sending_shortly" && (
+                <button
+                  type="button"
+                  onClick={cancelCountdown}
+                  className="inline-flex min-h-[2.75rem] shrink-0 items-center rounded-xl border-2 border-[var(--color-line)] bg-[var(--color-surface)] px-4 text-[1rem] font-medium hover:bg-[var(--color-surface-muted)] focus-visible:outline-[3px] focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)]"
+                >
+                  Cancel
+                </button>
+              )}
+            </div>
             {noraStateText.length > 0 && !saysTheSame(noraStateText, voiceHeadline) && (
               <p className="pt-1 text-[0.97rem] leading-relaxed text-[var(--color-muted)]">
                 {noraStateText}
@@ -1294,7 +1457,9 @@ export function Chat(props: {
             className="flex items-center gap-1.5 pb-1.5 pl-1 text-[0.9rem] text-[var(--color-muted)]"
           >
             <MicIcon />
-            Voice transcript — check it, then press Send
+            {nora === "sending_shortly"
+              ? "Voice transcript — sending shortly"
+              : "Voice transcript — check it, then press Send"}
           </p>
         )}
 
@@ -1323,7 +1488,13 @@ export function Chat(props: {
             id="chat-input"
             ref={composerRef}
             value={input}
-            onChange={(event) => setInput(event.target.value)}
+            onChange={(event) => {
+              // Correcting a mis-heard word is the commonest reason to stop
+              // an auto-send, and the least likely thing to be expressed by
+              // finding a Cancel button first (M12h).
+              cancelCountdownRef.current();
+              setInput(event.target.value);
+            }}
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();

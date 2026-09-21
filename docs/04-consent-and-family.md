@@ -183,6 +183,14 @@ This is why `handleTurn` reads the bounded transcript **before** the consent
 step rather than after it (step 3, then step 4). Reading has no side effects,
 so nothing else about the turn changed.
 
+**And the interface stopped auto-sending into it (M12h).** A wake-word
+transcript now sends itself after a three-second countdown — except while an
+offer is on screen, where it never does. That is the same rule a third time,
+in the third place it can be broken: the parser decides what a yes is, the
+service decides which offer may be answered, and the composer decides
+whether the person had to press anything at all. Consent is the one turn in
+CareLoop that is always sent by hand.
+
 ## 11.3 What is stored as evidence
 
 ```ts
