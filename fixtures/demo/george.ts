@@ -93,9 +93,82 @@ export const DEMO_GEORGE: DemoFixtureSpec = {
   ],
 
   facts: [
-    // About the user themself (subject null), and observable.
-    { subjectKey: null, key: "occupation_former", value: "retired police officer", confidence: 0.9 },
-    { subjectKey: null, key: "living_situation", value: "lives at home", confidence: 0.9 },
-    { subjectKey: null, key: "age", value: "87", confidence: 0.9 },
+    // Basic profile
+    {
+      subjectKey: null,
+      key: "occupation_former",
+      value: "retired police officer",
+      confidence: 0.9,
+    },
+    {
+      subjectKey: null,
+      key: "living_situation",
+      value: "lives at home",
+      confidence: 0.9,
+    },
+    {
+      subjectKey: null,
+      key: "age",
+      value: "87",
+      confidence: 0.9,
+    },
+
+    // Daily routine
+    {
+      subjectKey: null,
+      key: "usual_wake_time",
+      value: "around 7:00 AM",
+      confidence: 0.9,
+    },
+    {
+      subjectKey: null,
+      key: "usual_breakfast_time",
+      value: "around 8:30 AM",
+      confidence: 0.9,
+    },
+    {
+      subjectKey: null,
+      key: "usual_morning_coffee_time",
+      value: "around 10:30 AM",
+      confidence: 0.9,
+    },
+    {
+      subjectKey: null,
+      key: "usual_walk_time",
+      value: "around 4:30 PM",
+      confidence: 0.9,
+    },
+    {
+      subjectKey: null,
+      key: "usual_dinner_time",
+      value: "around 7:00 PM",
+      confidence: 0.9,
+    },
+    {
+      subjectKey: null,
+      key: "usual_bedtime",
+      value: "around 10:30 PM",
+      confidence: 0.9,
+    },
+
+    // Preferences
+    {
+      subjectKey: null,
+      key: "preferred_morning_drink",
+      value: "coffee",
+      confidence: 0.9,
+    },
+    {
+      subjectKey: null,
+      key: "favorite_tv_show",
+      value: "Midsomer Murders",
+      confidence: 0.9,
+    },
+    {
+      subjectKey: null,
+      key: "usual_tv_time",
+      value: "after dinner in the evening",
+      confidence: 0.9,
+    },
   ],
 };
