@@ -1,6 +1,7 @@
 import type { Notifier, NotifierMessage } from "@/server/adapters/notifier";
 import type { Db } from "@/server/repositories/db";
 import type { ConsentGrantRecord, ConsentGrantsRepo } from "@/server/repositories/consent-grants";
+import { buildOfferBlock } from "@/core/share/offer";
 import { sha256Hex } from "@/core/share/text-hash";
 import type { FamilyContactRecord, FamilyContactsRepo } from "@/server/repositories/family-contacts";
 import type { FamilyRequestRecord, FamilyRequestsRepo } from "@/server/repositories/family-requests";
@@ -477,6 +478,31 @@ export function conversationUnderway(
     content,
     createdAt: new Date(endingAt.getTime() - (lines.length - 1 - index) * step).toISOString(),
   }));
+}
+
+/**
+ * The same conversation, with the card actually on the screen.
+ *
+ * `handleConsentReply` will not act on an offer the transcript does not
+ * carry (M12g), which is the whole point of that rule: a yes answers a
+ * question somebody was asked. Tests about what happens AFTER an offer
+ * therefore have to show it, and this is how they say so in one line.
+ *
+ * It appends the real block, not a marker, so the substring test is
+ * satisfied the way production satisfies it.
+ */
+export function afterOfferShown(
+  renderedText: string,
+  endingAt: Date = new Date(),
+): Array<{ role: string; content: string; createdAt: string }> {
+  return [
+    ...conversationUnderway(endingAt),
+    {
+      role: "assistant",
+      content: buildOfferBlock({ entityName: "them", renderedText }),
+      createdAt: endingAt.toISOString(),
+    },
+  ];
 }
 
 export function m5Deps(input: {

@@ -8,7 +8,7 @@ import type { ConversationsRepo } from "@/server/repositories/conversations";
 import type { MessagesRepo, StoredMessage } from "@/server/repositories/messages";
 import { sha256Hex } from "@/core/share/text-hash";
 import { createStore, resetIds } from "./detection-fakes";
-import { m5Deps, resetM5Ids, withM5, type M5Store , conversationUnderway} from "./consent-fakes";
+import { afterOfferShown, m5Deps, resetM5Ids, withM5, type M5Store , conversationUnderway} from "./consent-fakes";
 
 /**
  * POST /api/voice/speak, exercised as a browser exercises it.
@@ -256,6 +256,7 @@ describe("3. refusals are quiet and specific", () => {
       userId: USER,
       text: "no thank you",
       grantingMessageId: "msg-1",
+      recentMessages: afterOfferShown(offer.renderedText, NOW),
     });
     speakableDeps = { ...d.closure, ...transcript() };
 

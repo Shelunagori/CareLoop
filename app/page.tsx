@@ -10,7 +10,10 @@ import {
   DemoRestartButton,
   StartDemo,
 } from "@/app/_components/demo-start";
+import { resetDemoAction } from "@/app/_actions/demo";
+import { DemoResetControl, FamilyInboxLink } from "@/app/_components/dev-operator";
 import { getCurrentIdentity } from "@/server/auth/current-user";
+import { operatorAccessAllowed } from "@/server/auth/operator-access";
 import { isDebugSurfaceEnabled, isDemoModeEnabled } from "@/server/config";
 import { loadConversationView } from "@/server/services/conversation";
 import { loadOpeningLine } from "@/server/services/opening";
@@ -99,22 +102,33 @@ export default async function Page() {
     }));
 
   /**
-   * NO DEVELOPER CONTROLS ON THIS PAGE, IN ANY ENVIRONMENT (M12e.3).
+   * THE DEMO CONTROLS, BACK ON THE PAGE — AND PROPERLY GATED (M12f).
    *
-   * "Reset demo — development only" and "Family inbox (dev)" used to render
-   * in the chat header behind `isDebugSurfaceEnabled`. That was correctly
-   * gated and still wrong: this is the surface a reviewer records, and
-   * scaffolding in shot is scaffolding in shot whether or not it ships to
-   * production. Marking a control "(dev)" explains it without removing it.
+   * M12e.3 moved them to `/dev` because "Reset demo — development only"
+   * and "Family inbox (dev)" read as scaffolding in a recording. The
+   * controls were not the problem; the LABELS were. A reviewer driving the
+   * demo needs both of these within reach of the conversation, so they are
+   * back, as **Family view** and **Reset demo** — no "(dev)", no
+   * "development only", nothing that says this is a workbench.
    *
-   * Both controls, and the demo hint, now live on `/dev` behind the same
-   * four-condition gate `/dev/family-inbox` uses. Nothing was loosened and
-   * no new way in was invented — the controls simply moved to the door they
-   * already belonged behind.
+   * What changed underneath is the gate. This page previously checked only
+   * `isDebugSurfaceEnabled`; it now uses the SAME four conditions as
+   * `/dev` and `/dev/family-inbox`, from one shared function — local
+   * development, not a deployment, a configured dev seed secret, and a
+   * loopback host. The wording got friendlier and the authorization got
+   * stricter, which is the right direction for both.
    *
-   * What is left in this slot is product UI: a public-demo visitor may
-   * start their OWN demo over. It says nothing about development, and it is
-   * authorized by owning the anonymous session rather than by a dev secret.
+   * Decided on the SERVER. These are server components rendered into a
+   * slot, so on a deployment neither the controls nor their words exist at
+   * all — a build-output scan checks that rather than trusting it.
+   *
+   * `/dev` is untouched and remains the operator page.
+   */
+  const operator = await operatorAccessAllowed();
+  /**
+   * Product UI, and a different question: a public-demo visitor may start
+   * their OWN demo over. Authorized by owning the anonymous session rather
+   * than by a dev secret, so it is offered on deployments too.
    */
   const canRestartDemo = demoMode && identity.isAnonymous;
 
@@ -125,7 +139,16 @@ export default async function Page() {
       initialMessages={initialMessages}
       initialPendingOffer={view.pendingOffer}
       displayName={view.displayName}
-      devTools={canRestartDemo ? <DemoRestartButton action={resetDemoSessionAction} /> : null}
+      devTools={
+        operator ? (
+          <div className="flex items-start gap-2">
+            <FamilyInboxLink label="Family view" />
+            <DemoResetControl action={resetDemoAction} />
+          </div>
+        ) : canRestartDemo ? (
+          <DemoRestartButton action={resetDemoSessionAction} />
+        ) : null
+      }
     />
   );
 }

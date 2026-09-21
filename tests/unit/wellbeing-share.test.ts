@@ -10,6 +10,7 @@ import { noteWellbeingSelfReport, type WellbeingDeps } from "@/server/services/w
 import { handleConsentReply, prepareOffer } from "@/server/services/consent";
 import { createStore, fakeReconnectDeps, fakeFamilyRender, resetIds } from "./detection-fakes";
 import {
+  afterOfferShown,
   fakeFamilyContacts,
   m5Deps,
   resetM5Ids,
@@ -174,6 +175,7 @@ describe("11/12/13. sharing it requires an explicit yes", () => {
       userId: USER,
       text: "No thanks.",
       grantingMessageId: "msg-2",
+      recentMessages: afterOfferShown(store.opportunities[0].renderedText!, NOW),
     });
     expect(answer.outcome).toBe("declined");
     expect(store.grants).toHaveLength(0);
@@ -199,6 +201,7 @@ describe("11/12/13. sharing it requires an explicit yes", () => {
       userId: USER,
       text: "Yes please.",
       grantingMessageId: "msg-2",
+      recentMessages: afterOfferShown(shown.renderedText, NOW),
     });
     expect(answer.outcome).toBe("approved");
     if (answer.outcome !== "approved") return;

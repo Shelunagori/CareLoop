@@ -236,6 +236,8 @@ instruction to the prompt".
 | **5** | "Don sent me a message today" was answered with a question about John. | Extraction runs after the reply, so a first mention can never have a card — and the cards that did exist read as an agenda. The turn now states plainly when nobody in memory was named. |
 | **6** | "I was not feeling good today" got a shallow answer and a change of subject. | An explicit self-report is now an application-owned fact: a warm follow-up, and a consented offer to tell one family member the bare sentence. |
 | **7** | A reviewer's recording showed "Reset demo — development only" in the product chrome, and the built bundle still carried those words. | The development copy moved into server components; the one client module that needs interactivity now contains no words at all, and a test scans the built output. The controls then moved off the page entirely, to `/dev`. |
+| **9** | An empty conversation said "Say hello whenever you're ready." under a static "Hello, George" header. | The person was being asked to start, and the header was a label rather than a greeting. One sentence now: a time-of-day greeting from the **browser's** clock, plus either the deterministic memory question or an ordinary "How are you doing?". Nothing is invented to personalise it. |
+| **10** | "Hey Nora" was required before every single answer. | A voice-originated turn now opens a bounded **conversation burst**: when the reply finishes, one follow-up window opens on its own, under the same endpointing contract. Silence ends the burst. Send is still pressed by a person, so a spoken "yes" is chat input and never an authorization. |
 | **8** | An entity reclassified to `origin = 'dev'` still rendered "RECONNECT WITH TESTPERSONA" on page load. | The rule had been added to one of nine reads of an entity's name, and the card a reviewer sees first comes from a different one. Provenance is now a single core rule, applied at every presentation boundary and filtered in SQL as well — because the opportunity was created while the entity was still classified `user`, so nothing stored on it could ever have revealed the change. |
 
 ## AI-assisted development workflow
@@ -706,14 +708,16 @@ exact `x-careloop-dev-secret` header match. Anything else returns a bare 404.
 | `/api/dev/seed-events` | POST | Replay the demo timeline through the production pipeline |
 | `/api/dev/detect` | POST | Run a detection sweep on demand |
 | `/api/dev/family-inbox` | GET | Read the dev notifier's outbox (stands in for real delivery) |
-| `/dev` | GET | **The operator surface.** Reset demo, the family inbox, a link to `/debug`, and the demo's opening line |
+| `/dev` | GET | **The operator surface.** Reset demo, the family inbox, a link to `/debug`, and the demo's opening line. Kept alongside the two controls on `/` |
 | `/dev/family-inbox` | GET | The same outbox as an inbox, so the demo can show both sides of the loop |
 
-The CareLoop page itself carries **no developer control in any
-environment**, local development included (M12e.3). Gating them was correct
-and was not enough: the conversation surface is what a reviewer records, and
-a control marked "(dev)" is still in shot. They all moved to `/dev`, behind
-the same four conditions — no token, no query parameter, no new way in.
+The CareLoop page carries **Family view** and **Reset demo** when — and only
+when — all four of those conditions hold (M12f). The controls were never the
+problem; the labels were, and "(dev)" and "development only" are gone from
+the conversation surface. The gate underneath got *stricter*: the page used
+to check one condition (`isDebugSurfaceEnabled`) and now asks the same
+`operatorAccessAllowed` that `/dev` does. On a deployment they do not render
+and their words are not in the bundle, which a build-output scan checks.
 
 Every entity these routes create is stamped `origin = 'dev'` and is therefore
 never named to a person. Rows they created **before** that column existed are

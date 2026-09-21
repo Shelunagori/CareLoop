@@ -25,7 +25,12 @@ export type EpisodeCard = {
   precision: "exact" | "day" | "week" | "unknown";
 };
 
-export type FactCard = { key: string; value: string };
+export type FactCard = {
+  key: string;
+  value: string;
+  /** M12f: rendered, so the prompt's "not yet confirmed" rule applies here too. */
+  status: EvidenceStatus;
+};
 
 function renderStatus(status: EvidenceStatus): string {
   return status === "confirmed" ? "" : " (not yet confirmed)";
@@ -94,9 +99,27 @@ export function renderEntityCard(card: EntityCard): string {
 
 export function renderProfileCard(facts: readonly FactCard[]): string | null {
   if (facts.length === 0) return null;
+  /**
+   * A CANDIDATE SAYS SO (M12f).
+   *
+   * Entity cards have always marked an unconfirmed relationship "not yet
+   * confirmed", and the conversation prompt has a rule about exactly that
+   * phrase — never state it as fact, never build on it, ask if it
+   * matters. Profile facts were rendered without the marker, so a
+   * single-mention claim about the person reached the model looking
+   * identical to one they had confirmed, and the rule had nothing to
+   * attach to.
+   *
+   * One mention in one conversation is a candidate; a second distinct
+   * conversation, or the person saying so outright, confirms it
+   * (`core/memory/evidence.ts`). Nothing about that policy changes here —
+   * this only makes the answer visible where it is used.
+   */
   const lines = [...facts]
     .sort((a, b) => a.key.localeCompare(b.key))
-    .map((fact) => `- ${fact.key}: ${fact.value}`);
+    .map((fact) =>
+      `- ${fact.key}: ${fact.value}${renderStatus(fact.status)}`,
+    );
   return ["What you know about them:", ...lines].join("\n");
 }
 

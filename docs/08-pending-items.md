@@ -46,6 +46,39 @@ and after:
 "don't send it"        -> decline  (dont_send)        — unchanged
 ```
 
+## P1, second occurrence (M12g)
+
+Reported from a live browser after M12f, and fixed in the same pass that
+found it — recorded here because it is the same row, and because "the M9 fix
+closed this class" turned out to be false.
+
+```
+"yeah, it was good. tell me about something about weather."
+                       -> approve  (affirmative_opener)   <-- the gap
+```
+
+The M9 fix disqualifies an affirmative when a HEDGE follows it. This sentence
+does not hedge; it changes the subject, which has no vocabulary to list. The
+bound is therefore on length rather than content:
+
+```
+"yes"                                  -> approve  (affirmative_opener)
+"yes please send it to them"           -> approve  (send_it)
+"yeah, it was good. tell me about ..." -> unclear  (null — not an answer)
+"that's very kind of you, yes, please send it to them when you can"
+                                       -> approve  (send_it)   — unbounded
+"no, don't send it, I'd rather tell them myself"
+                                       -> decline  (dont_send) — unbounded
+```
+
+An `unclear` with a **null** rule is the important half: the turn falls
+through to ordinary conversation, so somebody who asked about the weather is
+answered about the weather rather than asked "yes or no?".
+
+The parser was only half of it. See `docs/04` §11.2c for the other half —
+an offer that was never on the screen is no longer answerable at all, which
+is the rule that would have stopped this even with the parser unfixed.
+
 ## P1, as originally recorded
 
 Transcripts observed:

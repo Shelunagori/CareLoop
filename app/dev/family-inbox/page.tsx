@@ -1,6 +1,5 @@
-import { headers } from "next/headers";
 import { notFound } from "next/navigation";
-import { authorizeDevSeed, isDebugSurfaceEnabled, isLocalOperatorHost } from "@/server/config";
+import { operatorAccessAllowed } from "@/server/auth/operator-access";
 import { readNotifierInbox } from "@/server/services/dev-tools";
 import { QuotedText } from "@/app/_components/ui";
 
@@ -53,18 +52,10 @@ export const dynamic = "force-dynamic";
  * would disagree the first time one of them was wrong.
  */
 export default async function FamilyInboxPage() {
-  if (!isDebugSurfaceEnabled(process.env)) notFound();
-  // Supplying the configured secret to itself: this asserts that one is set,
-  // which is the environment condition. It is not a caller check - see above.
-  const auth = authorizeDevSeed(process.env, process.env.CARELOOP_DEV_SEED_SECRET ?? null);
-  if (!auth.allowed) notFound();
-
-  const requestHeaders = await headers();
-  const local = isLocalOperatorHost({
-    host: requestHeaders.get("host"),
-    forwardedHost: requestHeaders.get("x-forwarded-host"),
-  });
-  if (!local) notFound();
+  // M12f: the four conditions moved to one shared function, so the page
+  // that shows a capability link and the page that offers the controls
+  // cannot drift apart.
+  if (!(await operatorAccessAllowed())) notFound();
 
   const messages = readNotifierInbox();
 

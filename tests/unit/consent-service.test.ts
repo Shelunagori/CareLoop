@@ -10,7 +10,7 @@ import { buildOfferBlock, OFFER_CLOSING_QUESTION } from "@/core/share/offer";
 import { sha256Hex } from "@/core/share/text-hash";
 import { grantState } from "@/core/consent/validation";
 import { createStore, resetIds, type StoredOpportunity } from "./detection-fakes";
-import { m5Deps, resetM5Ids, withM5, type M5Store } from "./consent-fakes";
+import { afterOfferShown, m5Deps, resetM5Ids, withM5, type M5Store } from "./consent-fakes";
 
 /**
  * The offer and the answer.
@@ -192,6 +192,7 @@ describe("2. the answer", () => {
       userId: USER,
       text,
       grantingMessageId: "msg-yes",
+      recentMessages: afterOfferShown(TEXT, NOW),
     });
     return { store, outcome };
   }
@@ -256,6 +257,7 @@ describe("2. the answer", () => {
       userId: USER,
       text: "yes",
       grantingMessageId: "msg-yes",
+      recentMessages: afterOfferShown(TEXT, NOW),
     });
 
     expect(outcome.outcome).toBe("expired");
@@ -267,6 +269,7 @@ describe("2. the answer", () => {
     const store = storeWith();
     const outcome = await handleConsentReply(deps(store).consent, {
       userId: USER, text: "yes", grantingMessageId: null,
+      recentMessages: afterOfferShown(TEXT, NOW),
     });
     expect(outcome.outcome).toBe("no_offer");
   });
@@ -279,8 +282,14 @@ describe("3. a duplicated yes produces one grant, not two", () => {
     await prepareOffer(d, { userId: USER, conversationId: "conv-1", recentMessages: SITTING });
 
     const [a, b] = await Promise.all([
-      handleConsentReply(d, { userId: USER, text: "yes", grantingMessageId: "m1" }),
-      handleConsentReply(d, { userId: USER, text: "yes", grantingMessageId: "m2" }),
+      handleConsentReply(d, {
+        userId: USER, text: "yes", grantingMessageId: "m1",
+        recentMessages: afterOfferShown(TEXT, NOW),
+      }),
+      handleConsentReply(d, {
+        userId: USER, text: "yes", grantingMessageId: "m2",
+        recentMessages: afterOfferShown(TEXT, NOW),
+      }),
     ]);
 
     expect(store.grants).toHaveLength(1);
@@ -294,10 +303,14 @@ describe("3. a duplicated yes produces one grant, not two", () => {
     const store = storeWith();
     const d = deps(store).consent;
     await prepareOffer(d, { userId: USER, conversationId: "conv-1", recentMessages: SITTING });
-    await handleConsentReply(d, { userId: USER, text: "yes", grantingMessageId: "m1" });
+    await handleConsentReply(d, {
+      userId: USER, text: "yes", grantingMessageId: "m1",
+      recentMessages: afterOfferShown(TEXT, NOW),
+    });
 
     const again = await handleConsentReply(d, {
       userId: USER, text: "yes", grantingMessageId: "m2",
+      recentMessages: afterOfferShown(TEXT, NOW),
     });
     expect(again.outcome).toBe("no_offer");
     expect(store.grants).toHaveLength(1);
@@ -309,6 +322,7 @@ describe("4. approval requires an offer that was actually made", () => {
     const store = storeWith();
     const outcome = await handleConsentReply(deps(store).consent, {
       userId: USER, text: "yes", grantingMessageId: null,
+      recentMessages: afterOfferShown(TEXT, NOW),
     });
     // `offered` is the only state a yes can act on: the person has to have
     // been shown the bytes.

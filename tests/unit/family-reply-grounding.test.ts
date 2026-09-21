@@ -11,7 +11,7 @@ import { buildConsentHooks } from "@/server/services/consent-hooks";
 import { drainEvents, fakeJobs, fakeLlm, fakeRepos, type CallLog } from "./fakes";
 import { sha256Hex } from "@/core/share/text-hash";
 import { createStore, resetIds } from "./detection-fakes";
-import { m5Deps, resetM5Ids, withM5, type M5Store , conversationUnderway} from "./consent-fakes";
+import { afterOfferShown, m5Deps, resetM5Ids, withM5, type M5Store , conversationUnderway} from "./consent-fakes";
 
 /**
  * P0: CARELOOP MUST NEVER INVENT A FAMILY REPLY.
@@ -101,6 +101,7 @@ async function deliveredAndUnanswered() {
     userId: USER,
     text: "yes please",
     grantingMessageId: "msg-1",
+    recentMessages: afterOfferShown(TEXT, NOW),
   });
   if (approval.outcome !== "approved") throw new Error(`expected approval: ${approval.outcome}`);
 

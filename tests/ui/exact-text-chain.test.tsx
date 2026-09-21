@@ -13,7 +13,7 @@ import { sha256Hex } from "@/core/share/text-hash";
 import { renderFamilyEmail } from "@/core/family/email";
 import { Chat, type PendingOffer } from "@/app/_components/chat";
 import { createStore, resetIds } from "../unit/detection-fakes";
-import { m5Deps, resetM5Ids, withM5, type M5Store , conversationUnderway} from "../unit/consent-fakes";
+import { afterOfferShown, m5Deps, resetM5Ids, withM5, type M5Store , conversationUnderway} from "../unit/consent-fakes";
 
 /**
  * THE CHAIN. The strongest claim this project makes.
@@ -127,6 +127,7 @@ describe("one sentence, six surfaces, zero edits", () => {
     // 3. approval snapshot
     await handleConsentReply(d.consent, {
       userId: USER, text: "yes", grantingMessageId: "msg-1",
+      recentMessages: afterOfferShown(TEXT, NOW),
     });
     const snapshot = store.grants[0].renderedTextSnapshot;
 
@@ -204,6 +205,7 @@ describe("one sentence, six surfaces, zero edits", () => {
     await prepareOffer(d.consent, { userId: USER, conversationId: "conv-1", recentMessages: conversationUnderway(NOW) });
     await handleConsentReply(d.consent, {
       userId: USER, text: "yes", grantingMessageId: "msg-1",
+      recentMessages: afterOfferShown(TEXT, NOW),
     });
     await sendApprovedOpportunity(d.send, { userId: USER, opportunityId: "opp-1" });
 
@@ -227,9 +229,11 @@ describe("one sentence, six surfaces, zero edits", () => {
     });
 
     for (const id of ["opp-1", "opp-2"]) {
-      await prepareOffer(d.consent, { userId: USER, conversationId: "conv-1", recentMessages: conversationUnderway(NOW) });
+      const shown = await prepareOffer(d.consent, { userId: USER, conversationId: "conv-1", recentMessages: conversationUnderway(NOW) });
+      if (shown.outcome !== "offered") throw new Error(`expected an offer for ${id}`);
       await handleConsentReply(d.consent, {
         userId: USER, text: "yes", grantingMessageId: `msg-${id}`,
+        recentMessages: afterOfferShown(shown.renderedText, NOW),
       });
       await sendApprovedOpportunity(d.send, { userId: USER, opportunityId: id });
     }

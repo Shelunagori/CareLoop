@@ -35,7 +35,18 @@ vi.mock("@/app/_components/nora", async (importOriginal) => {
     ...actual,
     fetchNoraStatus: async () => {
       status.asked += 1;
-      return status.value;
+      /**
+       * A FRESH OBJECT, like the real one (M12g).
+       *
+       * This fake used to return `status.value` itself, so every answer was
+       * referentially identical and `setNoraStatus` bailed out of the
+       * re-render. That hid a live defect: the real `fetchNoraStatus`
+       * parses JSON and returns a new object, which changed an effect
+       * dependency, re-ran the effect, and cancelled the follow-up window
+       * it had just opened. A mock that is stabler than production is a
+       * mock that tests something production does not do.
+       */
+      return { ...status.value };
     },
     noraBrowserSupported: () => true,
     startNora: async (options: { onWake: () => void }) => {
@@ -208,32 +219,75 @@ describe("2. when the audio finishes", () => {
 
     audio.end();
 
-    await waitFor(() => expect(screen.getByText(/listening for .Hey Nora./i)).toBeTruthy());
-    await armedExactlyOnce(before);
+    /**
+     * M12f CHANGED WHAT HAPPENS HERE, and this is the test that says so.
+     *
+     * A voice-originated turn opens a conversation BURST, so the reply
+     * finishing no longer re-arms the wake detector — it opens ONE bounded
+     * follow-up window instead, and the person answers without saying
+     * "Hey Nora" again. The detector stays DOWN for the whole burst,
+     * because the follow-up recorder owns the microphone and two ways into
+     * it at once is the thing the state machine exists to prevent.
+     */
+    await waitFor(() => expect(screen.getByText(/listening for your reply/i)).toBeTruthy());
+    expect(screen.queryByText(/listening for .Hey Nora./i)).toBeNull();
+    // A recording really opened — no second wake was needed.
+    expect(await screen.findByRole("button", { name: /stop recording/i })).toBeTruthy();
+    await settle();
+    // And the wake engine was never resumed while it was open.
+    expect(engine.resumes).toBe(before);
   });
 
-  it("and the engine really is armed — a wake is accepted", async () => {
-    // The state machine saying "armed" and the detector BEING armed are two
-    // different claims, and only this one is about Porcupine. Without it a
-    // regression that left the engine paused while the headline said
-    // otherwise would pass every other test in this file.
+  it("the follow-up still requires an explicit Send", async () => {
+    // The burst changes who has to say "Hey Nora". It changes nothing
+    // about who presses Send — which is the whole consent argument: a
+    // spoken "yes" is chat input, never an authorization.
     await speakAReply();
     const before = engine.resumes;
     audio.end();
-    await armedExactlyOnce(before);
+    await waitFor(() => expect(screen.getByText(/listening for your reply/i)).toBeTruthy());
 
-    engine.onWake();
-    expect(await screen.findByRole("button", { name: /stop recording/i })).toBeTruthy();
+    fireEvent.click(await screen.findByRole("button", { name: /stop recording/i }));
+    await waitFor(() => expect(composer().value).toBe("good morning"));
+
+    expect(screen.getByRole("button", { name: /^send$/i })).toBeTruthy();
+    const calls = (globalThis.fetch as unknown as { mock: { calls: string[][] } }).mock.calls;
+    expect(calls.filter((c) => c[0] === "/api/chat")).toHaveLength(1); // the FIRST turn only
+    expect(engine.resumes).toBe(before);
   });
 
-  it("pressing Stop reading re-arms too", async () => {
+  it("End voice session ends it too, and Nora stays on", async () => {
     await speakAReply();
-    const stopReading = await screen.findByRole("button", { name: /stop reading/i });
+    audio.end();
+    await waitFor(() => expect(screen.getByText(/listening for your reply/i)).toBeTruthy());
     const before = engine.resumes;
 
-    fireEvent.click(stopReading);
+    fireEvent.click(screen.getByRole("button", { name: /end voice session/i }));
 
     await waitFor(() => expect(screen.getByText(/listening for .Hey Nora./i)).toBeTruthy());
+    expect(toggle().getAttribute("aria-checked")).toBe("true");
+    await armedExactlyOnce(before);
+  });
+
+  it("a TYPED turn opens no burst — the detector re-arms as before", async () => {
+    // Playback happens for a typed message too, once this person has used
+    // voice at all. They did not ask for a microphone, so they do not get
+    // one: no burst, and the old behaviour is unchanged.
+    await speakAReply();
+    audio.end();
+    await waitFor(() => expect(screen.getByText(/listening for your reply/i)).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: /end voice session/i }));
+    await waitFor(() => expect(screen.getByText(/listening for .Hey Nora./i)).toBeTruthy());
+
+    fireEvent.change(composer(), { target: { value: "I typed this" } });
+    fireEvent.click(screen.getByRole("button", { name: /^send$/i }));
+    await waitFor(() => expect(audio.plays).toBe(2));
+    const before = engine.resumes;
+
+    audio.end();
+
+    await waitFor(() => expect(screen.getByText(/listening for .Hey Nora./i)).toBeTruthy());
+    expect(screen.queryByText(/listening for your reply/i)).toBeNull();
     await armedExactlyOnce(before);
   });
 

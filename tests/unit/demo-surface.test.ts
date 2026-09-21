@@ -133,7 +133,11 @@ describe("4. demo configuration is a server fact", () => {
   it("no development surface was weakened to make the demo work", () => {
     // The dev gates are untouched: still development-only, still allow-lists.
     expect(code("app/debug/page.tsx")).toContain("isDebugSurfaceEnabled");
-    expect(code("app/dev/family-inbox/page.tsx")).toContain("isLocalOperatorHost");
+    // M12f: the loopback check moved into the shared operator gate, which
+    // the page calls. The condition did not go anywhere — it is now the
+    // same one the CareLoop page uses.
+    expect(code("app/dev/family-inbox/page.tsx")).toContain("operatorAccessAllowed");
+    expect(code("server/auth/operator-access.ts")).toContain("isLocalOperatorHost");
     for (const route of [
       "app/api/dev/demo/setup/route.ts",
       "app/api/dev/demo/state/route.ts",

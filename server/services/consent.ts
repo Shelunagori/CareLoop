@@ -13,6 +13,7 @@ import {
   buildCadencePreamble,
   buildOfferBlock,
   needsRepresenting,
+  transcriptShowsDraft,
   type TranscriptMessage,
 } from "@/core/share/offer";
 import { buildWellbeingPreamble } from "@/core/wellbeing/offer";
@@ -432,9 +433,108 @@ export function replyForExpired(): string {
  * Anything that is not a clear yes or a clear no leaves the opportunity
  * exactly where it was.
  */
+/**
+ * The one offer this reply is allowed to be an answer to, or none.
+ *
+ * TWO CONDITIONS, AND BOTH ARE NEW (M12g). A reviewer typed "Yeah, it was
+ * good. Tell me about something about weather." and was told "Thank you -
+ * I'll send that to them now." The parser is fixed separately; this is the
+ * other half, and it is the half that mattered, because a false yes should
+ * still not have been able to authorize anything.
+ *
+ *   IT HAS TO HAVE BEEN SHOWN. The stored bytes must appear in the recent
+ *   transcript. Consent is an answer to a question, and a question nobody
+ *   was asked cannot be answered - not by a yes, and not by a no either.
+ *   Until now `offered` alone was treated as "on the table", which is a
+ *   claim about the database rather than about the person: a stream that
+ *   died after the status update, or a card that has since scrolled out of
+ *   the window, both leave a row that looks answerable and a screen that
+ *   shows nothing. `needsRepresenting` has always used exactly this test to
+ *   decide whether to show the card again, so the two halves of the loop
+ *   now agree on what "shown" means instead of disagreeing.
+ *
+ *   ITS SUBJECT HAS TO BE PRESENTABLE. `prepareOffer` refuses to draw a
+ *   card for a `dev`-provenance entity (M12e.3). The answering path did
+ *   not, and fell back to the word "them" when the name came back
+ *   unprintable - which is how an invisible card for a seeded test row
+ *   produced "I'll send that to them now". A rule that governs only the
+ *   half of a loop the person can see is not a rule.
+ *
+ * Both are conservative in the same direction: the cost of being wrong is a
+ * missed nudge, against an unrequested message to somebody's family.
+ */
+type AnswerableOffer =
+  | { outcome: "found"; opportunity: OpportunityRecord; entityName: string }
+  | { outcome: "expired"; result: ConsentOutcome }
+  | { outcome: "none" };
+
+async function answerableOffer(
+  deps: ConsentDeps,
+  input: {
+    userId: string;
+    offered: readonly OpportunityRecord[];
+    recentMessages: ReadonlyArray<TranscriptMessage>;
+    now: Date;
+  },
+): Promise<AnswerableOffer> {
+  // Suppression allows one open opportunity per entity, and the offer cap
+  // allows one per conversation, so more than one is not expected. Newest
+  // first is the deterministic choice if it ever happens.
+  for (const opportunity of input.offered) {
+    if (Date.parse(opportunity.expiresAt) <= input.now.getTime()) {
+      await deps.opportunities.markExpired(opportunity.id, input.now.toISOString());
+      return {
+        outcome: "expired",
+        result: { outcome: "expired", opportunityId: opportunity.id, reply: replyForExpired() },
+      };
+    }
+
+    if (
+      opportunity.renderedText === null ||
+      !transcriptShowsDraft(input.recentMessages, opportunity.renderedText)
+    ) {
+      logEvent({
+        event: "consent.reply_ignored",
+        opportunityId: opportunity.id,
+        reason: "offer_not_shown",
+      });
+      continue;
+    }
+
+    const entity = await entityLabelFor(deps, {
+      userId: input.userId,
+      entityId: opportunity.entityId,
+    });
+    if (entity === null) {
+      logEvent({
+        event: "consent.reply_ignored",
+        opportunityId: opportunity.id,
+        entityId: opportunity.entityId,
+        reason: "unpresentable_entity",
+      });
+      continue;
+    }
+
+    return { outcome: "found", opportunity, entityName: entity.displayName };
+  }
+  return { outcome: "none" };
+}
+
 export async function handleConsentReply(
   deps: ConsentDeps,
-  input: { userId: string; text: string; grantingMessageId: string | null },
+  input: {
+    userId: string;
+    text: string;
+    grantingMessageId: string | null;
+    /**
+     * The same bounded transcript the rest of the turn reads. REQUIRED, and
+     * required for the reason in `answerableOffer`: an offer nobody was
+     * shown is not something a person can be answering. An optional
+     * parameter would have defaulted to "answer it anyway", which is the
+     * bug.
+     */
+    recentMessages: ReadonlyArray<TranscriptMessage>;
+  },
 ): Promise<ConsentOutcome> {
   const now = deps.clock.now();
   const offered = await deps.opportunities.listByStatusForUser(
@@ -444,20 +544,17 @@ export async function handleConsentReply(
   );
   if (offered.length === 0) return { outcome: "no_offer" };
 
-  // Suppression allows one open opportunity per entity, and the offer cap
-  // allows one per conversation, so more than one is not expected. Newest
-  // first is the deterministic choice if it ever happens.
-  const opportunity = offered[0];
+  const answerable = await answerableOffer(deps, {
+    userId: input.userId,
+    offered,
+    recentMessages: input.recentMessages,
+    now,
+  });
+  if (answerable.outcome === "expired") return answerable.result;
+  if (answerable.outcome === "none") return { outcome: "no_offer" };
+
+  const { opportunity, entityName } = answerable;
   const reading: ConsentReading = readConsent(input.text);
-
-  if (Date.parse(opportunity.expiresAt) <= now.getTime()) {
-    await deps.opportunities.markExpired(opportunity.id, now.toISOString());
-    return { outcome: "expired", opportunityId: opportunity.id, reply: replyForExpired() };
-  }
-
-  const entityName =
-    (await entityLabelFor(deps, { userId: input.userId, entityId: opportunity.entityId }))
-      ?.displayName ?? "them";
 
   logEvent({
     event: "consent.reply_read",

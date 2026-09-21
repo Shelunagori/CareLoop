@@ -11,6 +11,28 @@ import { Chat, type ChatMessage } from "@/app/_components/chat";
  */
 const OPENING = "How did the visit with Margaret go yesterday?";
 
+/**
+ * THE CLOCK IS FIXED (M12f).
+ *
+ * The opening now carries a time-of-day greeting read from the BROWSER,
+ * so a test that does not pin the clock passes in the afternoon and fails
+ * in the morning. Only `Date` is faked; timers stay real, because
+ * `waitFor` needs them.
+ *
+ * 19:30 — an evening, chosen so "Good evening" is the expected word and a
+ * bucket regression reads as a wrong word rather than a missing one.
+ */
+const EVENING = new Date("2026-09-21T19:30:00");
+
+/**
+ * The opening is ONE sentence now — greeting and question together — so a
+ * test matches inside it rather than against an exact node.
+ */
+const shows = (fragment: string | RegExp): boolean => {
+  const text = document.body.textContent ?? "";
+  return typeof fragment === "string" ? text.includes(fragment) : fragment.test(text);
+};
+
 function stubBrowser() {
   class FakeRecorder {
     static isTypeSupported = (t: string) => t === "audio/webm;codecs=opus";
@@ -54,40 +76,74 @@ afterEach(() => {
 });
 
 describe("1. the proactive opening", () => {
-  it("is shown when the server supplied one", () => {
-    render(<Chat initialConversationId="c" initialMessages={[]} openingLine={OPENING} />);
-    expect(screen.getByText(OPENING)).toBeTruthy();
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(EVENING);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
-  it("is absent when the server supplied none — a normal start", () => {
+  it("combines the greeting with the memory question", () => {
+    render(
+      <Chat
+        initialConversationId="c"
+        initialMessages={[]}
+        openingLine={OPENING}
+        displayName="George"
+      />,
+    );
+    // One sentence, in this order: who they are, then what CareLoop has
+    // to ask. Not two bubbles and not a header label (M12f).
+    expect(shows(`Good evening, George. ${OPENING}`)).toBe(true);
+  });
+
+  it("greets on its own when the server supplied no memory question", () => {
+    // The placeholder this replaces was "Say hello whenever you're ready."
+    // — the person being asked to start. A greeting is CareLoop starting.
+    render(
+      <Chat
+        initialConversationId="c"
+        initialMessages={[]}
+        openingLine={null}
+        displayName="George"
+      />,
+    );
+    expect(shows("Good evening, George. How are you doing?")).toBe(true);
+    // And nothing was invented to fill the gap.
+    expect(shows(/how did the visit/i)).toBe(false);
+    expect(document.body.textContent).not.toContain("Say hello whenever");
+  });
+
+  it("drops the name when there is none, and never says a bare comma", () => {
     render(<Chat initialConversationId="c" initialMessages={[]} openingLine={null} />);
-    expect(screen.queryByText(/how did the visit/i)).toBeNull();
-    // And nothing generic takes its place.
-    expect(document.body.textContent).not.toMatch(/good morning|how are you today/i);
+    expect(shows("Good evening. How are you doing?")).toBe(true);
+    expect(document.body.textContent).not.toContain("Good evening,");
   });
 
   it("is absent when the conversation already has messages", () => {
     const history: ChatMessage[] = [{ id: "m1", role: "user", content: "hello" }];
     render(<Chat initialConversationId="c" initialMessages={history} openingLine={OPENING} />);
-    expect(screen.queryByText(OPENING)).toBeNull();
+    expect(shows(OPENING)).toBe(false);
+    expect(document.body.textContent).not.toContain("Good evening");
   });
 
   it("disappears the moment they say anything", async () => {
     render(<Chat initialConversationId="c" initialMessages={[]} openingLine={OPENING} />);
     fireEvent.change(screen.getByLabelText(/write a message/i), { target: { value: "it was lovely" } });
     fireEvent.click(screen.getByRole("button", { name: /^send$/i }));
-    await waitFor(() => expect(screen.queryByText(OPENING)).toBeNull());
+    await waitFor(() => expect(shows(OPENING)).toBe(false));
   });
 
   it("is not shown twice in one browser session", () => {
     const { unmount } = render(
       <Chat initialConversationId="c" initialMessages={[]} openingLine={OPENING} />,
     );
-    expect(screen.getByText(OPENING)).toBeTruthy();
+    expect(shows(OPENING)).toBe(true);
     unmount();
 
     render(<Chat initialConversationId="c" initialMessages={[]} openingLine={OPENING} />);
-    expect(screen.queryByText(OPENING)).toBeNull();
+    expect(shows(OPENING)).toBe(false);
   });
 
   it("a different opening in a later session is shown again", () => {
@@ -97,7 +153,23 @@ describe("1. the proactive opening", () => {
     unmount();
     const other = "How was your call with Alan yesterday?";
     render(<Chat initialConversationId="c" initialMessages={[]} openingLine={other} />);
-    expect(screen.getByText(other)).toBeTruthy();
+    expect(shows(other)).toBe(true);
+  });
+
+  it("the hour rolling over does not bring a seen opening back", () => {
+    // The session flag is keyed on the MEMORY line, not on the composed
+    // sentence — otherwise the greeting changing at five past five would
+    // re-show an opening the person has already read.
+    const { unmount } = render(
+      <Chat initialConversationId="c" initialMessages={[]} openingLine={OPENING} />,
+    );
+    expect(shows(OPENING)).toBe(true);
+    unmount();
+
+    vi.setSystemTime(new Date("2026-09-22T08:00:00"));
+    render(<Chat initialConversationId="c" initialMessages={[]} openingLine={OPENING} />);
+    expect(shows(OPENING)).toBe(false);
+    expect(document.body.textContent).not.toContain("Good morning");
   });
 });
 

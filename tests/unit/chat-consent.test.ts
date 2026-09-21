@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { fixedClock } from "@/server/adapters/clock";
 import { handleTurn } from "@/server/services/conversation";
 import { buildConsentHooks } from "@/server/services/consent-hooks";
-import { OFFER_CLOSING_QUESTION } from "@/core/share/offer";
+import { buildOfferBlock, OFFER_CLOSING_QUESTION } from "@/core/share/offer";
 import { sha256Hex } from "@/core/share/text-hash";
 import { drain, fakeJobs, fakeLlm, fakeRepos, type CallLog } from "./fakes";
 import { createStore, resetIds } from "./detection-fakes";
@@ -56,9 +56,34 @@ function m5Store(status: "drafted" | "offered" = "drafted"): M5Store {
   return store;
 }
 
-function harness(store: M5Store, options: { chunks?: string[] } = {}) {
+/**
+ * `alreadyShown`: the draft is already in the transcript, because an earlier
+ * turn drew the card.
+ *
+ * Not decoration. A yes may only answer an offer the person was actually
+ * shown (M12g), so a fixture that sets `status: "offered"` and leaves the
+ * conversation empty is describing a state production never reaches: the
+ * status is written by the very turn that emits the block. These tests are
+ * about what the SECOND turn does, so they have to start where the second
+ * turn starts.
+ */
+function harness(store: M5Store, options: { chunks?: string[]; alreadyShown?: string } = {}) {
   const log: CallLog = [];
-  const repos = fakeRepos({ log, ownedConversationIds: ["conv-1"] });
+  const repos = fakeRepos({
+    log,
+    ownedConversationIds: ["conv-1"],
+    existingMessages:
+      options.alreadyShown === undefined
+        ? []
+        : [
+            {
+              id: "msg-shown",
+              role: "assistant",
+              content: buildOfferBlock({ entityName: "John", renderedText: options.alreadyShown }),
+              createdAt: NOW.toISOString(),
+            },
+          ],
+  });
   const llm = fakeLlm({ log, chunks: options.chunks ?? ["It has been a lovely week."] });
   const jobs = fakeJobs({ log });
   const services = m5Deps({ store, clock: fixedClock(NOW) });
@@ -159,7 +184,7 @@ describe("1. the offer is appended by the application, verbatim", () => {
 describe("2. a clear answer never reaches the model", () => {
   it("approves deterministically, with zero model calls", async () => {
     const store = m5Store("offered");
-    const h = harness(store);
+    const h = harness(store, { alreadyShown: TEXT });
 
     const turn = await handleTurn(h.deps, {
       userId: USER, conversationId: "conv-1", text: "yes please",
@@ -180,7 +205,7 @@ describe("2. a clear answer never reaches the model", () => {
 
   it("declines deterministically, and sends nothing", async () => {
     const store = m5Store("offered");
-    const h = harness(store);
+    const h = harness(store, { alreadyShown: TEXT });
 
     const turn = await handleTurn(h.deps, {
       userId: USER, conversationId: "conv-1", text: "no, don't send it",
@@ -196,7 +221,7 @@ describe("2. a clear answer never reaches the model", () => {
 
   it("asks once more on hesitation, without re-showing the message", async () => {
     const store = m5Store("offered");
-    const h = harness(store);
+    const h = harness(store, { alreadyShown: TEXT });
 
     const output = await drain(
       (await handleTurn(h.deps, { userId: USER, conversationId: "conv-1", text: "maybe later" }))
@@ -211,7 +236,7 @@ describe("2. a clear answer never reaches the model", () => {
 
   it("lets an unrelated remark be an unrelated remark", async () => {
     const store = m5Store("offered");
-    const h = harness(store);
+    const h = harness(store, { alreadyShown: TEXT });
 
     const turn = await handleTurn(h.deps, {
       userId: USER, conversationId: "conv-1", text: "The roses came out beautifully.",
@@ -223,6 +248,48 @@ describe("2. a clear answer never reaches the model", () => {
     expect(h.log.filter((entry) => entry === "llm.streamChat")).toHaveLength(1);
     expect(store.opportunities[0].status).toBe("offered");
     expect(store.grants).toHaveLength(0);
+  });
+});
+
+/**
+ * THE REPORTED TURN, END TO END (M12g).
+ *
+ * Everything else about this bug is tested a layer down. This is the one
+ * that reads like the bug report, because the bug report is what a reviewer
+ * will type again.
+ */
+describe("2b. the sentence that sent a message to somebody's family", () => {
+  const REPORTED = "Yeah, it was good. Tell me about something about weather.";
+
+  it("is answered by the companion, not by the consent path", async () => {
+    const store = m5Store("offered");
+    const h = harness(store, { alreadyShown: TEXT });
+
+    const turn = await handleTurn(h.deps, {
+      userId: USER, conversationId: "conv-1", text: REPORTED,
+    });
+    const output = await drain(turn.stream);
+
+    expect(output).not.toContain("I'll send that");
+    expect(turn.deterministic).toBe(false);
+    expect(turn.pendingSendOpportunityId).toBeNull();
+    expect(h.log.filter((entry) => entry === "llm.streamChat")).toHaveLength(1);
+    expect(store.opportunities[0].status).toBe("offered");
+    expect(store.grants).toHaveLength(0);
+  });
+
+  it("and a plain yes, to a card that is on the screen, still sends", async () => {
+    // The guard against over-correction: this whole fix is worthless if it
+    // also broke the thing it is protecting.
+    const store = m5Store("offered");
+    const h = harness(store, { alreadyShown: TEXT });
+
+    const turn = await handleTurn(h.deps, {
+      userId: USER, conversationId: "conv-1", text: "yes please",
+    });
+
+    expect(turn.pendingSendOpportunityId).toBe("opp-1");
+    expect(store.grants[0].renderedTextSnapshot).toBe(TEXT);
   });
 });
 

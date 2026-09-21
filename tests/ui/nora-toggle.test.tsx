@@ -33,7 +33,10 @@ vi.mock("@/app/_components/nora", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/app/_components/nora")>();
   return {
     ...actual,
-    fetchNoraStatus: async () => status.value,
+    // A FRESH OBJECT, like the real one (M12g). Returning the same
+    // reference made `setNoraStatus` a no-op re-render and hid a live
+    // defect — see tests/ui/nora-endpointing.test.tsx §17.
+    fetchNoraStatus: async () => ({ ...status.value }),
     noraBrowserSupported: () => true,
     startNora: async (options: { onWake: () => void }) => {
       if (engine.failWith) {
@@ -339,13 +342,26 @@ describe("5. a wake turn, and the draft that must stand the detector down", () =
     );
   });
 
-  it("re-arms once the draft is SENT", async () => {
+  it("SENDING a voice draft opens a conversation burst, not a re-arm", async () => {
+    /**
+     * M12f changed this. A voice-originated turn now opens a bounded
+     * follow-up window after the reply, so the person can answer without
+     * saying "Hey Nora" again — and the wake engine stays DOWN for the
+     * whole burst, because the follow-up recorder owns the microphone.
+     *
+     * Clearing the draft still re-arms (the test below), because clearing
+     * is not a conversation.
+     */
     await wake();
     await finishTurn();
     const resumesBefore = engine.resumes;
 
     fireEvent.click(screen.getByRole("button", { name: /^send/i }));
-    await waitFor(() => expect(engine.resumes).toBe(resumesBefore + 1));
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /end voice session/i })).toBeTruthy(),
+    );
+    expect(engine.resumes).toBe(resumesBefore);
   });
 
   it("re-arms once the draft is CLEARED", async () => {

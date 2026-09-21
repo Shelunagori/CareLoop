@@ -102,10 +102,20 @@ either.
 
 ## Reaching the operator surface
 
-`/dev` — Reset demo, the family inbox and a link to `/debug`, behind the
-same four conditions as `/dev/family-inbox`: local development, not a
-deployment, a configured `CARELOOP_DEV_SEED_SECRET`, and a loopback host.
-Anything else is a bare 404. None of it renders on `/`.
+The four conditions — local development, not a deployment, a configured
+`CARELOOP_DEV_SEED_SECRET`, a loopback host — live in
+`server/auth/operator-access.ts` and are asked by every surface that offers
+an operator control.
+
+- `/dev` — Reset demo, the family inbox, a link to `/debug`. A bare 404
+  otherwise; the route does not advertise its own existence.
+- `/` — the same two controls, as **Family view** and **Reset demo**, in the
+  CareLoop header (M12f). No "(dev)", no "development only": the labels were
+  what made a recording look like a workbench, and the gate is the same one
+  `/dev` uses rather than the single condition the page checked before.
+
+`Family view` links to the real local capability flow — the same component,
+the same href. There is no second family UI.
 
 ## After cleanup
 

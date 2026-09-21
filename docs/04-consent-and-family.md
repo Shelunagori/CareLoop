@@ -139,6 +139,50 @@ this conversation; restating it back at them would be the system explaining
 the person to themselves. The two triggers stay separate, here and in `03`
 §10.3a.
 
+## 11.2c What may be answered (M12g)
+
+A reviewer typed:
+
+```
+Yeah, it was good. Tell me about something about weather.
+```
+
+and CareLoop replied **"Thank you — I'll send that to them now."** It then
+sent it. Two independent faults had to line up, and both are now closed.
+
+**A yes is the whole sentence.** `affirmative_opener` is anchored at the
+start and said nothing about what came after it, so a message that opened
+agreeably and then changed the subject approved an irreversible family
+action. This is P1 (`"yes but later"`) in a new disguise, and the M9 fix
+could not have caught it: that fix works by vocabulary — `later`, `maybe`,
+`not now` — and changing the subject has no vocabulary. What separates a yes
+from a sentence beginning with one is not *which* words follow but that
+**any** do. The opener now counts only when the message is substantially
+just the affirmation (`OPENER_MAX_WORDS = 6`). Every explicit phrase —
+`send it`, `go ahead`, `yes please`, `that's fine` — stays unanchored and
+unbounded, so a wordy but genuine approval is still an approval. Refusal is
+never bounded: a long sentence that starts with "no" still means no.
+
+**And an offer nobody was shown cannot be answered at all.** Even a real yes
+should not have been able to act here, because the card had never been drawn:
+the opportunity belonged to a `dev`-provenance entity that `prepareOffer`
+refuses to present (§11.2a), and `handleConsentReply` had no such rule — it
+fell back to the word "them" when the name came back unprintable. So
+`answerableOffer` in `server/services/consent.ts` now applies two conditions
+before any reading of the reply is acted on:
+
+| Condition | Why |
+|---|---|
+| the stored bytes appear in the recent transcript | Consent answers a question. A question nobody was asked cannot be answered — not by a yes, and not by a no. `needsRepresenting` has always used this exact test to decide whether to redraw the card, so the two halves of the loop now agree on what *shown* means. |
+| the entity is presentable (`user` or `demo`) | A rule that governs only the half of a loop the person can see is not a rule. |
+
+Both fail in the same direction: the cost of being wrong is a missed nudge,
+against an unrequested message to somebody's family.
+
+This is why `handleTurn` reads the bounded transcript **before** the consent
+step rather than after it (step 3, then step 4). Reading has no side effects,
+so nothing else about the turn changed.
+
 ## 11.3 What is stored as evidence
 
 ```ts

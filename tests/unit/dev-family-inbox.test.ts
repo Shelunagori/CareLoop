@@ -47,26 +47,39 @@ describe("1. the inbox cannot exist outside local development", () => {
   });
 
   it("the page checks that gate itself, rather than trusting its route", () => {
+    // M12f: the four conditions moved into one shared function so the
+    // CareLoop page could use exactly the same ones. The page still asks
+    // — it just no longer inlines the question.
     const page = code("app/dev/family-inbox/page.tsx");
-    expect(page).toContain("isDebugSurfaceEnabled");
-    expect(page).toContain("authorizeDevSeed");
+    expect(page).toContain("await operatorAccessAllowed()");
     expect(page).toContain("notFound()");
+
+    const gate = code("server/auth/operator-access.ts");
+    expect(gate).toContain("isDebugSurfaceEnabled");
+    expect(gate).toContain("authorizeDevSeed");
   });
 });
 
 describe("2. the secret does not become something a browser has seen", () => {
   it("the page reads it on the server and renders none of it", () => {
     const page = source("app/dev/family-inbox/page.tsx");
+    const gate = source("server/auth/operator-access.ts");
 
-    // A server component: no "use client", so nothing here is bundled.
+    // Server components: no "use client", so nothing here is bundled. The
+    // gate additionally imports `server-only`, so a client bundle that
+    // reached for it would fail to build rather than ship it (M12f).
     expect(page).not.toContain('"use client"');
-    // The secret is read once, as an argument to the gate, and never put in
-    // markup, a prop, a link or a query string.
-    const uses = page.match(/CARELOOP_DEV_SEED_SECRET/g) ?? [];
-    expect(uses).toHaveLength(1);
-    expect(page).toMatch(/authorizeDevSeed\(\s*process\.env,\s*process\.env\.CARELOOP_DEV_SEED_SECRET/);
+    expect(gate).not.toContain('"use client"');
+    expect(gate).toContain('import "server-only"');
+
+    // The secret is read ONCE, in the gate, as an argument — never put in
+    // markup, a prop, a link or a query string, on either file.
+    expect(page).not.toContain("CARELOOP_DEV_SEED_SECRET");
+    expect((gate.match(/CARELOOP_DEV_SEED_SECRET/g) ?? [])).toHaveLength(1);
+    expect(gate).toMatch(/authorizeDevSeed\(env, env\.CARELOOP_DEV_SEED_SECRET/);
     for (const leak of ["localStorage", "sessionStorage", "searchParams", "?secret", "x-careloop-dev-secret"]) {
       expect(page, leak).not.toContain(leak);
+      expect(gate, leak).not.toContain(leak);
     }
   });
 
@@ -220,16 +233,15 @@ describe("5. what the inbox shows, and what it refuses to show", () => {
 });
 
 describe("6. George's product contains no door into John's inbox", () => {
-  it("the operator control renders only on the operator surface", () => {
-    // M12e.3: one server-side decision, on `/dev`, made of the same four
-    // conditions as this viewer itself. The conversation page has no dev
-    // affordance in any environment, so none of them reach any bundle.
-    const operator = code("app/dev/page.tsx");
-    expect(operator).toContain("isDebugSurfaceEnabled(process.env)");
-    expect(operator).toContain("authorizeDevSeed(process.env");
-    expect(operator).toContain("isLocalOperatorHost");
-    expect(operator).toContain("<FamilyInboxLink />");
-    expect(code("app/page.tsx")).not.toContain("FamilyInboxLink");
+  it("both surfaces gate the link with the same four conditions", () => {
+    // M12f: the link is back on the CareLoop page as "Family view", and
+    // `/dev` keeps its own. Neither invents a gate — both call the one
+    // function, which is the point of extracting it.
+    for (const page of ["app/dev/page.tsx", "app/page.tsx"]) {
+      expect(code(page), page).toContain("operatorAccessAllowed");
+      expect(code(page), page).toContain("FamilyInboxLink");
+    }
+    expect(code("app/page.tsx")).toContain('<FamilyInboxLink label="Family view" />');
   });
 
   it("the link lives with the operator controls, not in the conversation", () => {
@@ -238,10 +250,12 @@ describe("6. George's product contains no door into John's inbox", () => {
     const chat = source("app/_components/chat.tsx");
 
     expect(link).toContain('href="/dev/family-inbox"');
-    // M12e.3: rendered on the operator surface, never in the conversation.
+    // M12f: it goes to the REAL local capability flow from either
+    // surface — the same component, the same href, no second inbox.
     const dev = code("app/dev/page.tsx");
     expect(dev).toMatch(/<FamilyInboxLink \/>/);
-    expect(home).not.toContain("FamilyInboxLink");
+    expect(home).toContain('<FamilyInboxLink label="Family view" />');
+    // And the conversation component itself still knows nothing about it.
     // The chat itself knows nothing about it. George is not being shown a way
     // into his family's messages; the demo operator is.
     expect(chat).not.toContain("family-inbox");
@@ -345,24 +359,31 @@ describe("7. the viewer is reachable only from the operator's own machine", () =
     expect(isLocalOperatorHost({ host: "LocalHost" })).toBe(true);
   });
 
-  it("the page composes all five conditions, and the host is one of them", () => {
-    const page = code("app/dev/family-inbox/page.tsx");
-    expect(page).toContain("isDebugSurfaceEnabled");
-    expect(page).toContain("authorizeDevSeed");
-    expect(page).toContain("isLocalOperatorHost");
+  it("the gate composes all the conditions, and the host is one of them", () => {
+    // M12f: composed once, in `operator-access.ts`, and used by every
+    // surface that offers an operator control — including the CareLoop
+    // page, which previously checked only the first condition.
+    const gate = code("server/auth/operator-access.ts");
+    expect(gate).toContain("isDebugSurfaceEnabled");
+    expect(gate).toContain("authorizeDevSeed");
+    expect(gate).toContain("isLocalOperatorHost");
     // Read from the request, not from configuration.
-    expect(page).toMatch(/await headers\(\)/);
-    expect(page).toContain('"host"');
-    expect(page).toContain('"x-forwarded-host"');
-    // Every failure is the same 404. A different answer per reason would tell
-    // a prober which condition they had satisfied.
-    expect((page.match(/notFound\(\)/g) ?? []).length).toBeGreaterThanOrEqual(3);
+    expect(gate).toMatch(/await headers\(\)/);
+    expect(gate).toContain('"host"');
+    expect(gate).toContain('"x-forwarded-host"');
+
+    // Every consumer answers a refusal the same way. A different answer
+    // per reason would tell a prober which condition they had satisfied.
+    for (const page of ["app/dev/family-inbox/page.tsx", "app/dev/page.tsx"]) {
+      expect(code(page), page).toMatch(/if \(!\(await operatorAccessAllowed\(\)\)\) notFound\(\);/);
+    }
   });
 
   it("the page does not claim the caller presented the secret", () => {
     // The comment is part of the deliverable here: an overclaimed security
     // note is how a reviewer is talked out of checking.
-    const doc = source("app/dev/family-inbox/page.tsx");
+    const doc =
+      source("app/dev/family-inbox/page.tsx") + source("server/auth/operator-access.ts");
     expect(doc).toMatch(/not caller-authenticated|does not prove the caller|not authentication/i);
   });
 

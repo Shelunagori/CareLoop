@@ -77,6 +77,12 @@ export type ConsentTurnHooks = {
     userId: string;
     text: string;
     grantingMessageId: string | null;
+    /**
+     * Required: an offer the person was never shown cannot be answered
+     * (M12g). This is why the bounded transcript is read before the consent
+     * step rather than after it.
+     */
+    recentMessages: ReadonlyArray<{ role: string; content: string; createdAt: string }>;
   }): Promise<ConsentOutcome>;
   prepareOffer(input: {
     userId: string;
@@ -209,7 +215,24 @@ export async function handleTurn(
     content: input.text,
   });
 
-  // 3. CONSENT FIRST. If exactly one offer is awaiting an answer, this turn
+  /**
+   * 3. Bounded recent turns, read BEFORE anything decides anything.
+   *
+   * This query already includes the message persisted in step 2 — it is the
+   * newest row — so it is NOT appended again.
+   *
+   * It used to be read after the consent step, which was the ordering of a
+   * time when consent needed nothing but the person's words. It does now: a
+   * yes may only answer an offer whose bytes are actually on the screen
+   * (M12g), and the transcript is where that is known. Reading is free of
+   * side effects, so moving it earlier changes nothing else about the turn.
+   */
+  const recentTurns = await deps.messages.listRecent(
+    conversation.id,
+    chatConfig.recentTurnLimit,
+  );
+
+  // 4. CONSENT FIRST. If exactly one offer is awaiting an answer, this turn
   //    may be that answer, and ordinary chat generation must not get the
   //    chance to swallow or reinterpret it. A clear yes or no is handled
   //    deterministically, with no model call at all.
@@ -219,11 +242,12 @@ export async function handleTurn(
       conversationId: conversation.id,
       userMessageId: userMessage.id,
       text: input.text,
+      recentMessages: recentTurns,
     });
     if (answered) return answered;
 
     /**
-     * 3b. A VERIFIED CLOSURE ENDS THE TURN, DETERMINISTICALLY.
+     * 4b. A VERIFIED CLOSURE ENDS THE TURN, DETERMINISTICALLY.
      *
      * Whether a family member replied is an external-world fact. The
      * application owns it end to end - the sentence that STATES it and the
@@ -257,7 +281,7 @@ export async function handleTurn(
   }
 
   /**
-   * 3c. WHAT THEY SAID ABOUT THEMSELVES (M12e).
+   * 4c. WHAT THEY SAID ABOUT THEMSELVES (M12e).
    *
    * Deterministic, from their own sentence, before anything else looks at
    * this turn. Two entirely separate consequences, and neither is a
@@ -277,13 +301,6 @@ export async function handleTurn(
    *   speak to someone who can.
    */
   const wellbeing = readWellbeing(input.text);
-
-  // 4. Bounded recent turns. This query already includes the message persisted
-  //    in step 2 — it is the newest row — so it is NOT appended again.
-  const recentTurns = await deps.messages.listRecent(
-    conversation.id,
-    chatConfig.recentTurnLimit,
-  );
 
   // 5. Bounded memory retrieval (M2). A retrieval failure must not cost the
   //    person their reply, so the turn degrades to no memory rather than
@@ -307,7 +324,7 @@ export async function handleTurn(
   let awaiting: AwaitingFamilyReply | null = null;
   let offer: OfferResult | null = null;
   if (deps.consent) {
-    // No closure load here: step 3b already returned if one existed, so
+    // No closure load here: step 4b already returned if one existed, so
     // reaching this line PROVES there is none. The awaiting state is the only
     // family fact a generated turn can carry.
     awaiting = await deps.consent.loadAwaitingReply({ userId: input.userId });
@@ -330,7 +347,7 @@ export async function handleTurn(
     memory: {
       ...memory,
       selfReportedWellbeing: wellbeing.kind === "self_report",
-      // Always null on a generated turn: step 3b returned if a closure
+      // Always null on a generated turn: step 4b returned if a closure
       // existed, so the model is never handed one to talk about.
       pendingClosure: null,
       awaitingFamilyReply: awaiting
@@ -359,7 +376,7 @@ export async function handleTurn(
       userId: input.userId,
       conversationId: conversation.id,
       userMessageId: userMessage.id,
-      // A generated turn never carries a closure - step 3b took that branch.
+      // A generated turn never carries a closure - step 4b took that branch.
       closureSentence: null,
       closureId: null,
       closureFallback: null,
@@ -429,12 +446,14 @@ async function handleConsentTurn(
     conversationId: string;
     userMessageId: string;
     text: string;
+    recentMessages: ReadonlyArray<{ role: string; content: string; createdAt: string }>;
   },
 ): Promise<TurnResult | null> {
   const outcome = await deps.consent!.readReply({
     userId: input.userId,
     text: input.text,
     grantingMessageId: input.userMessageId,
+    recentMessages: input.recentMessages,
   });
 
   const reply =

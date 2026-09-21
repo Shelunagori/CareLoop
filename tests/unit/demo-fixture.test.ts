@@ -528,8 +528,13 @@ describe("6. the demo names never reach production code", () => {
       const source = readFileSync(file, "utf8");
       // Each is either gated itself, or is a component whose server parent
       // decides - and that parent is checked below.
+      // M12f: a file gates itself either by asking the environment
+      // directly, or by asking the shared operator gate — which is all
+      // four conditions rather than one.
       const gated =
-        source.includes("isDebugSurfaceEnabled") || source.includes('"use client"');
+        source.includes("isDebugSurfaceEnabled") ||
+        source.includes("operatorAccessAllowed") ||
+        source.includes('"use client"');
       expect(gated, file).toBe(true);
     }
     // The server-side one runs the real gate AND the four-condition check.
@@ -538,13 +543,19 @@ describe("6. the demo names never reach production code", () => {
     expect(action).toContain("authorizeDevSeed(process.env");
     // M12e.3: the OPERATOR PAGE decides whether the client control renders,
     // and the conversation page renders no developer control at all.
-    const operator = readFileSync("app/dev/page.tsx", "utf8");
-    expect(operator).toContain("isDebugSurfaceEnabled(process.env)");
-    expect(operator).toContain("authorizeDevSeed(process.env");
-    expect(operator).toContain("isLocalOperatorHost");
-    expect(operator).toMatch(/<DemoResetControl/);
-    const page = readFileSync("app/page.tsx", "utf8");
-    expect(page).not.toContain("DemoResetControl");
+    // M12f: both surfaces ask the SAME shared gate, and the gate is where
+    // the four conditions live. The CareLoop page offers the controls
+    // again — with friendlier labels and a stricter check than the single
+    // condition it used before.
+    const gate = readFileSync("server/auth/operator-access.ts", "utf8");
+    expect(gate).toContain("isDebugSurfaceEnabled");
+    expect(gate).toContain("authorizeDevSeed");
+    expect(gate).toContain("isLocalOperatorHost");
+    for (const file of ["app/dev/page.tsx", "app/page.tsx"]) {
+      const source = readFileSync(file, "utf8");
+      expect(source, file).toContain("operatorAccessAllowed");
+      expect(source, file).toMatch(/<DemoResetControl/);
+    }
   });
 
   it("the prompt-example allowance is exactly one file, and it is a prompt", () => {
@@ -622,14 +633,16 @@ describe("7. every demo route is development-only", () => {
     for (const file of DEMO_ONLY_FILES) {
       const source = readFileSync(file, "utf8");
       const gatesItself =
-        source.includes("isDemoModeEnabled") || source.includes("isDebugSurfaceEnabled");
+        source.includes("isDemoModeEnabled") ||
+        source.includes("isDebugSurfaceEnabled") ||
+        source.includes("operatorAccessAllowed");
       if (gatesItself) continue;
 
       const parent = GATED_BY_PARENT[file];
       expect(parent, `${file} neither gates itself nor names a gated parent`).toBeTruthy();
       const parentSource = readFileSync(parent, "utf8");
       expect(parentSource, `${parent} does not gate ${file}`).toMatch(
-        /isDemoModeEnabled|isDebugSurfaceEnabled/,
+        /isDemoModeEnabled|isDebugSurfaceEnabled|operatorAccessAllowed/,
       );
     }
   });

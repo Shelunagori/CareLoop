@@ -35,6 +35,8 @@ import { recoveryText } from "./recovery";
 import { NORA_MODEL_PATH } from "@/core/nora/config";
 import type { NoraUnavailableReason } from "@/core/nora/availability";
 import { noraState, noraStateHeadline, noraStateLabel, wakeIsArmed } from "@/core/nora/state";
+import { composeOpening } from "@/core/opening/greeting";
+import { useLocalHour } from "./local-hour";
 import type { EndpointOutcome } from "@/core/voice/endpoint";
 
 export type ChatMessage = {
@@ -144,15 +146,63 @@ export function Chat(props: {
   }
   const [openingDismissed, setOpeningDismissed] = useState(false);
   useEffect(() => {
-    if (!props.openingLine) return;
     try {
-      window.sessionStorage.setItem("careloop.opening", props.openingLine);
+      // Keyed on the MEMORY line, not on the composed sentence: the
+      // greeting changes when the hour rolls over, and an opening that
+      // reappeared at five past five would be a new bug (M12f).
+      window.sessionStorage.setItem("careloop.opening", props.openingLine ?? "");
     } catch {
       // Private mode, blocked storage. Showing it again is the failure, and
       // it is a small one.
     }
   }, [props.openingLine]);
   const [speaking, setSpeaking] = useState(false);
+  /**
+   * A CONVERSATION BURST (M12f).
+   *
+   * True from the moment a VOICE-ORIGINATED turn is sent until the burst
+   * ends. While it is true, the reply finishing opens ONE bounded
+   * follow-up window so the person can answer without saying "Hey Nora"
+   * again.
+   *
+   * This is not continuous listening and the microphone is not held open
+   * between turns: each window is a fresh recording under the same
+   * endpointing contract as a wake turn — speech-start timeout, silence
+   * finalisation, maximum duration — and the burst ends the moment one of
+   * them hears nothing.
+   *
+   * A ref beside the state because `endBurst` is called from callbacks
+   * that must not re-create themselves every render.
+   */
+  const [inBurst, setInBurst] = useState(false);
+  const inBurstRef = useRef(false);
+  /**
+   * ENDING A BURST ALSO CLOSES ITS MICROPHONE.
+   *
+   * Every ending routes through here — the toggle, typing, silence, a
+   * failure, the End button, unmount — so the release lives in one place
+   * rather than being remembered at six call sites. It reads the REFS
+   * rather than rendered state: a burst can end in the same tick the
+   * recorder opens, and a handler that checked `voice` would be reading a
+   * value one render behind the microphone.
+   *
+   * Idempotent. Callers that also cancel (the no-speech path, teardown)
+   * are not a bug; leaving a stream open once is.
+   */
+  const cancelBurstRecordingRef = useRef<() => void>(() => {});
+  const endBurst = useCallback(() => {
+    inBurstRef.current = false;
+    setInBurst(false);
+    cancelBurstRecordingRef.current();
+  }, []);
+  const endBurstRef = useRef(endBurst);
+  endBurstRef.current = endBurst;
+  const startBurst = useCallback(() => {
+    inBurstRef.current = true;
+    setInBurst(true);
+  }, []);
+  /** One follow-up per reply: reset when a burst turn is sent. */
+  const followUpOpenedRef = useRef(false);
   /**
    * How fast replies are read out (M12d). Remembered per browser, because
    * somebody who needs it slower needs it slower every time. It changes
@@ -262,6 +312,22 @@ export function Chat(props: {
       setOpeningDismissed(true);
       setStatus("sending");
       setConsentPending(consent);
+      /**
+       * A BURST BEGINS WHEN VOICE WORDS ARE SENT (M12f).
+       *
+       * Read before the composer is cleared, because clearing resolves
+       * `draftFromVoice`. Only a VOICE-originated turn opens one: somebody
+       * typing has not asked for a microphone, and must never be handed
+       * one because the reply happened to be read aloud.
+       *
+       * Sending is still explicit, here and for every follow-up. The burst
+       * changes who has to say "Hey Nora"; it changes nothing about who
+       * presses Send.
+       */
+      if (consent === null && draftFromVoiceRef.current) {
+        startBurst();
+        followUpOpenedRef.current = false;
+      }
       if (consent === null) setInput("");
 
       const stamp = Date.now();
@@ -379,7 +445,7 @@ export function Chat(props: {
         setConsentPending(null);
       }
     },
-    [conversationId, status, voiceModeOn, readAloud],
+    [conversationId, status, voiceModeOn, readAloud, startBurst],
   );
 
   /** Releases the end-of-turn watcher. Safe from anywhere, any number of times. */
@@ -407,6 +473,15 @@ export function Chat(props: {
     },
     [dropEndpointer, markWakeTurn],
   );
+
+  /**
+   * Abandon a burst's own recording, if one is open. A PRESSED recording
+   * is left alone: the person started that themselves and is holding the
+   * Stop button's attention.
+   */
+  cancelBurstRecordingRef.current = () => {
+    if (recordingRef.current !== null && wakeTurnRef.current) cancelRecording(null);
+  };
 
   const finishRecording = useCallback(async () => {
     const recording = recordingRef.current;
@@ -438,6 +513,10 @@ export function Chat(props: {
       // "I didn't catch that" tells the person to speak again; it must not be
       // said when the recording itself was the problem, or we blame their
       // voice for our bug. Either way nothing is sent and nothing is lost.
+      // Nothing heard, or the recording failed. Either way the burst stops
+      // rather than opening another window at somebody who has just been
+      // told CareLoop did not catch them (M12f).
+      endBurstRef.current();
       setVoiceNote(
         error instanceof NothingHeardError
           ? recoveryText("no_speech")
@@ -461,7 +540,20 @@ export function Chat(props: {
   }, [dropEndpointer, markWakeTurn]);
 
   const beginRecording = useCallback(
-    async (source: "press" | "wake" = "press") => {
+    async (
+      source: "press" | "wake" = "press",
+      /**
+       * Checked once, AFTER the microphone has actually opened (M12f).
+       *
+       * `startRecording` awaits a permission prompt and a MediaRecorder,
+       * and a person can press "End voice session" inside that gap. Without
+       * this the recorder would open into a burst that no longer exists:
+       * the state machine would say "Listening", nothing would ever stop
+       * it, and the microphone would stay live. Found by a flaky test,
+       * which is the honest way to find a race.
+       */
+      shouldAbort?: () => boolean,
+    ) => {
     setError(null);
     setVoiceNote(null);
     stopSpeaking();
@@ -500,12 +592,23 @@ export function Chat(props: {
               }
             : undefined,
       });
+      if (shouldAbort?.()) {
+        // The window closed while it was opening. Release everything and
+        // leave no trace — no state, no note, no open stream.
+        dropEndpointer();
+        const opened = recordingRef.current;
+        recordingRef.current = null;
+        opened?.cancel();
+        markWakeTurn(false);
+        return;
+      }
       // From here on this person hears replies. Nothing plays before they
       // have asked for voice at least once.
       setVoiceModeOn(true);
       setVoice("recording");
     } catch (error) {
       dropEndpointer();
+      endBurstRef.current();
       setVoiceNote(
         error instanceof MicrophoneError
           ? microphoneMessage(error.reason)
@@ -535,6 +638,11 @@ export function Chat(props: {
    * so calling this twice is not a bug — leaving a listener behind once is.
    */
   const teardownNora = useCallback(async () => {
+    // The burst goes with the engine. Toggling Nora off, the cutoff
+    // passing, an engine failure and a revalidation that comes back
+    // unavailable all arrive here, and none of them may leave a follow-up
+    // window queued behind them (M12f).
+    endBurstRef.current();
     // The watcher first: it is the only thing holding an audio graph, and it
     // must not outlive the engine that justified opening one.
     dropEndpointer();
@@ -667,6 +775,9 @@ export function Chat(props: {
   useEffect(() => {
     onEndpointRef.current = (outcome) => {
       if (outcome === "no_speech") {
+        // Silence is how a conversation ends. The burst closes and the
+        // page goes back to waiting for "Hey Nora" (M12f).
+        endBurstRef.current();
         cancelRecording(recoveryText("wake_heard_nothing"));
         return;
       }
@@ -707,6 +818,7 @@ export function Chat(props: {
   /** The whole session is released when this component goes away. */
   useEffect(() => {
     return () => {
+      endBurstRef.current();
       endpointerRef.current?.stop();
       endpointerRef.current = null;
       const session = noraRef.current;
@@ -808,6 +920,7 @@ export function Chat(props: {
     // playback and comes back through the same revalidating path as every
     // other arm — not through a resume() bolted onto the audio's onended.
     speaking,
+    inBurst,
   });
   const armed = wakeIsArmed(nora);
   // A pure mirror of a derived value, for the wake callback to read without
@@ -862,8 +975,131 @@ export function Chat(props: {
     };
   }, [armed]);
 
+  /** The one fact the follow-up effect branches on. See its dependency note. */
+  const noraAvailable = noraStatus?.available === true;
+
+  /**
+   * ONE BOUNDED FOLLOW-UP WINDOW, AFTER THE REPLY (M12f).
+   *
+   * The conversational gap this closes: today a person says "Hey Nora",
+   * speaks, sends, hears the answer — and has to say "Hey Nora" again
+   * before they may reply to it. Nobody talks like that.
+   *
+   * WHAT THIS IS. When a burst is open and the reply has finished being
+   * read out, ONE recording opens on its own, under exactly the endpointing
+   * contract a wake turn uses: speech-start timeout, silence finalisation,
+   * maximum duration, and a `no_speech` outcome that ends the burst. The
+   * transcript still lands in the composer, still visible, still editable,
+   * and Send is still pressed by a person.
+   *
+   * WHAT THIS IS NOT. Not continuous listening: the microphone is closed
+   * between turns and each window is a fresh, bounded recording. Not
+   * barge-in: the window opens only once playback has ENDED. Not
+   * auto-send: nothing leaves without a press, so a spoken "yes" is chat
+   * input and never an authorization.
+   *
+   * `followUpOpenedRef` makes it ONE per reply. Without it, clearing the
+   * composer mid-burst would open a second window for the same turn, and
+   * a microphone that reopens because somebody pressed Clear is a
+   * microphone nobody asked for.
+   */
+  useEffect(() => {
+    if (!inBurst) return;
+    if (followUpOpenedRef.current) return;
+    // Every one of these is a reason the person's attention is elsewhere,
+    // or the microphone is already spoken for.
+    if (speaking || voice !== "off" || status === "sending") return;
+    if (composerHasText) return;
+    if (!noraOn || !noraAvailable || noraRef.current === null) return;
+
+    followUpOpenedRef.current = true;
+    let cancelled = false;
+    void (async () => {
+      /**
+       * REVALIDATED, LIKE EVERY OTHER ARM.
+       *
+       * A follow-up window opens a microphone, so it asks the server the
+       * same question the arming effect asks: is Nora still available?
+       * Without this a page left open across the cutoff would keep opening
+       * windows inside an existing burst, because `armed` never transitions
+       * during one and the arming effect therefore never re-checks.
+       *
+       * A refusal tears the engine down and ends the burst, which is the
+       * same answer the arming path gives.
+       */
+      const fresh = await fetchNoraStatus();
+      if (cancelled) return;
+      setNoraStatus(fresh);
+      if (!fresh.available) {
+        endBurstRef.current();
+        await teardownNoraRef.current();
+        setNoraNote(noraMessage(fresh.reason ?? "expired"));
+        return;
+      }
+      if (cancelled || !inBurstRef.current) return;
+      // The burst may still end while the microphone is opening.
+      await beginRecording("wake", () => cancelled || !inBurstRef.current);
+    })();
+    return () => {
+      cancelled = true;
+    };
+    /**
+     * DEPENDENCIES ARE FACTS, NOT OBJECTS (M12g).
+     *
+     * `noraStatus` used to be in this list, and this effect CALLS
+     * `setNoraStatus` with the object the server returned. A fresh object
+     * every time meant storing the answer re-ran the effect, and the
+     * re-run's cleanup cancelled the window the first run had just opened.
+     * `followUpOpenedRef` then stopped the second run from opening another,
+     * so the burst sat there saying "Listening for your reply" with no
+     * microphone behind it and the wake engine paused — which is exactly
+     * how it was reported from the browser.
+     *
+     * The effect branches on one FACT about the status, so that boolean is
+     * the dependency. Re-validating no longer disturbs the thing being
+     * validated.
+     */
+  }, [inBurst, speaking, voice, status, composerHasText, noraOn, noraAvailable, beginRecording]);
+
+  /**
+   * TYPING ENDS THE BURST.
+   *
+   * Someone who reaches for the keyboard has chosen the other input, and
+   * leaving a follow-up window queued behind that would open a microphone
+   * at somebody who is already typing. A voice TRANSCRIPT in the composer
+   * is not typing and does not end anything — that is the burst working.
+   */
+  useEffect(() => {
+    if (inBurst && composerHasText && !draftFromVoice) endBurst();
+  }, [inBurst, composerHasText, draftFromVoice, endBurst]);
+
   const busy = status === "sending";
-  const greeting = props.displayName ? `Hello, ${props.displayName}` : null;
+
+  /**
+   * THE OPENING (M12f).
+   *
+   * One sentence, said once, by CareLoop — a time-of-day greeting from the
+   * BROWSER's clock, plus either the deterministic memory question the
+   * server decided was safe or an ordinary "How are you doing?".
+   *
+   * Null until the hour is known, which is one frame after mount: the
+   * server has no business guessing the person's timezone, and rendering a
+   * clock-dependent string during SSR is a hydration mismatch by
+   * construction. See `useLocalHour`.
+   *
+   * It is display-only. It is not a message, it is never persisted, it is
+   * not sent anywhere, and nothing reads it aloud — `readAloud` only ever
+   * speaks a message id the server returned.
+   */
+  const localHour = useLocalHour();
+  const opening =
+    localHour === null
+      ? null
+      : composeOpening({
+          hour: localHour,
+          displayName: props.displayName,
+          openingLine: props.openingLine,
+        });
 
   /**
    * Nora's state, in a sentence. A message produced by a failure outranks
@@ -882,9 +1118,15 @@ export function Chat(props: {
    */
   const voiceHeadline = noraStateHeadline(nora);
 
-  /** The opening survives only until the person says anything. */
+  /**
+   * The opening survives only until the person says anything.
+   *
+   * No longer conditional on there BEING a memory question (M12f): the
+   * greeting stands on its own, and an empty conversation with nothing in
+   * it at all was the placeholder this replaces.
+   */
   const showOpening =
-    Boolean(props.openingLine) &&
+    opening !== null &&
     !openingDismissed &&
     !openingSeenRef.current &&
     messages.length === 0 &&
@@ -908,20 +1150,9 @@ export function Chat(props: {
           </div>
           {props.devTools}
         </div>
-        {greeting && (
-          <p className="pt-3 text-[1.35rem] font-medium">{greeting}</p>
-        )}
       </header>
 
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pb-3">
-        {messages.length === 0 && (
-          <div className="pt-8 text-center">
-            <p className="text-[1.05rem] text-[var(--color-muted)]">
-              Say hello whenever you&rsquo;re ready.
-            </p>
-          </div>
-        )}
-
         {/*
           One live region for the whole transcript, polite rather than
           assertive, so a screen reader announces the reply when it settles
@@ -935,7 +1166,7 @@ export function Chat(props: {
         {showOpening && (
           <div className="flex justify-start pb-3">
             <div className="max-w-[85%] rounded-2xl rounded-bl-md border border-[var(--color-line)] bg-[var(--color-surface)] px-4 py-3 text-[1rem] leading-normal">
-              {props.openingLine}
+              {opening}
             </div>
           </div>
         )}
@@ -1190,6 +1421,24 @@ export function Chat(props: {
               simply off, so there is no state to announce — only an
               invitation, or the reason a start failed.
             */}
+            {/*
+              END VOICE SESSION (M12f).
+              Shown only while a burst is open, and the plainest way out of
+              one: a person who no longer wants to be listened to should
+              not have to work out that silence eventually ends it, or
+              that the toggle above would do it. It closes the burst and
+              cancels any window already open; Nora itself stays on and
+              goes back to waiting for "Hey Nora".
+            */}
+            {inBurst && (
+              <button
+                type="button"
+                onClick={endBurst}
+                className="inline-flex min-h-[2.75rem] items-center rounded-xl border border-[var(--color-line)] px-3 text-[0.95rem] text-[var(--color-muted)] hover:bg-[var(--color-surface-muted)]"
+              >
+                End voice session
+              </button>
+            )}
             {/*
               Reading speed. Offered only to somebody who has actually used
               voice this session — a typed-chat user has nothing to set.

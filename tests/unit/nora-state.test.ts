@@ -28,6 +28,7 @@ const base: NoraInputs = {
   draftFromVoice: false,
   sending: false,
   speaking: false,
+  inBurst: false,
 };
 
 const at = (overrides: Partial<NoraInputs> = {}): NoraState =>
@@ -159,12 +160,13 @@ describe("5. the whole input space, brute-forced", () => {
                 for (const composerHasText of bools)
                   for (const draftFromVoice of bools)
                     for (const sending of bools)
-                    for (const speaking of bools) {
+                    for (const speaking of bools)
+                    for (const inBurst of bools) {
                       total += 1;
                       const inputs: NoraInputs = {
                         configured, available, enabled, starting,
                         recorder, wakeTurn, composerHasText, draftFromVoice, sending,
-                        speaking,
+                        speaking, inBurst,
                       };
                       if (!wakeIsArmed(noraState(inputs))) continue;
                       armedCount += 1;
@@ -176,6 +178,13 @@ describe("5. the whole input space, brute-forced", () => {
                       expect(inputs.composerHasText).toBe(false);
                       expect(inputs.sending).toBe(false);
                       expect(inputs.speaking).toBe(false);
+                      /**
+                       * M12f. The wake detector is NEVER armed inside a
+                       * conversation burst. The burst's own bounded window
+                       * owns the microphone, and two ways into it at once
+                       * is the thing this file exists to prevent.
+                       */
+                      expect(inputs.inBurst).toBe(false);
                     }
 
     expect(total).toBeGreaterThan(1000);

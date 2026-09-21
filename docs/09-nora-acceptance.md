@@ -202,18 +202,40 @@ message from scratch: the line never appears.
 
 ### E — a clean reviewer screen
 
-Expected on `/` **in local development as well as in a production build**,
-with DevTools closed: no **Reset demo**, no **development only**, no
-**Family inbox (dev)**, no "Try saying…", no internal identifiers anywhere
-on screen, and — signed out — no mention of any environment variable or
-config file. A development-seeded entity must not appear on a card even if
-it has an open, already-offered opportunity.
+Expected on `/` in local development: **Family view** and **Reset demo** in
+the header, and nothing else developer-shaped — no "(dev)", no "development
+only", no "Try saying…", no internal identifiers, and — signed out — no
+mention of any environment variable or config file. A development-seeded
+entity must not appear on a card even if it has an open, already-offered
+opportunity. In a production build neither control renders at all.
 
-Then open `/dev`. Expected: **Reset demo** and **Family inbox (dev)** are
-both there. Click Reset demo and read the pending label: **Resetting…**,
-with a real ellipsis, never `Resetting\u2026`. Afterwards George, John and
-Simba are back as `demo` entities and anything `dev` is still invisible on
-`/`.
+Click Reset demo and read the pending label: **Resetting…**, with a real
+ellipsis, never `Resetting\u2026`. Afterwards George, John and Simba are back
+as `demo` entities and anything `dev` is still invisible.
+
+`/dev` remains the operator page and still offers both, with the
+"development only" caption.
+
+### F — the opening, and one wake per burst (M12f)
+
+Open a fresh session with an empty conversation. Expected: **one** sentence
+from CareLoop — "Good morning/afternoon/evening, George." followed by the
+deterministic memory question if there is one, or "How are you doing?" if
+there is not. Never "Say hello whenever you're ready.", never a static
+"Hello, George" in the header, and nothing is read aloud on page load. Say
+anything: the opening goes and does not come back.
+
+Then, with Nora on:
+
+```
+"Hey Nora"  →  speak  →  transcript  →  Send  →  the reply is read out
+→  "Listening for your reply"  →  answer WITHOUT saying "Hey Nora"
+→  transcript appears  →  Send is still required
+```
+
+Say nothing in a follow-up window: the burst ends and the page returns to
+**Waiting for "Hey Nora"**. **End voice session** does the same at any point,
+and Nora stays on.
 
 ## A. Wake reliability — 20 intended attempts
 

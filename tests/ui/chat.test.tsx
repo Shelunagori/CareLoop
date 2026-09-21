@@ -42,6 +42,10 @@ const type = (text: string) => {
 
 beforeEach(() => {
   vi.unstubAllGlobals();
+  // The opening is shown once per BROWSER SESSION (M12f), so each test
+  // starts a fresh one — otherwise the first render in this file hides it
+  // for every render after.
+  window.sessionStorage.clear();
 });
 
 describe("1. the transcript", () => {
@@ -56,15 +60,21 @@ describe("1. the transcript", () => {
     expect(screen.getByText("Good morning. How did you sleep?")).toBeTruthy();
   });
 
-  it("greets by name only when the server supplied one", () => {
+  it("greets by name in the opening, not as a header label", () => {
+    // M12f: the static "Hello, George" in the header is gone. The name
+    // appears once, in the sentence CareLoop opens with, and disappears
+    // with it — a label that sat there all session was not a greeting.
     const { unmount } = render(
       <Chat initialConversationId={null} initialMessages={[]} displayName="George" />,
     );
-    expect(screen.getByText("Hello, George")).toBeTruthy();
+    expect(document.body.textContent).toMatch(/(Good (morning|afternoon|evening)|Hello), George\./);
+    expect(screen.queryByText("Hello, George")).toBeNull();
     unmount();
 
     render(<Chat initialConversationId={null} initialMessages={[]} displayName={null} />);
-    expect(screen.queryByText(/^Hello,/)).toBeNull();
+    expect(document.body.textContent).not.toMatch(/, George/);
+    // And the placeholder that used to fill an empty conversation is gone.
+    expect(document.body.textContent).not.toContain("Say hello whenever");
   });
 
   it("renders a historical message that still carries the old plain-text offer", () => {
@@ -451,19 +461,26 @@ describe("6. development-only controls", () => {
   it("are rendered only when the server decided this is development", async () => {
     const fs = await import("node:fs");
     const page = fs.readFileSync("app/page.tsx", "utf8");
-    // M12e.3: the conversation surface renders NO developer control at all,
-    // in any environment. They live on `/dev`, behind the same
-    // four-condition gate `/dev/family-inbox` uses.
-    expect(page).not.toContain("DemoResetControl");
-    expect(page).not.toContain("FamilyInboxLink");
-    expect(page).not.toContain("DemoHint");
-    expect(page).not.toContain("demoHint");
-    // The one thing left in that slot is product UI: a demo visitor
-    // restarting their own demo, authorized by owning the session.
-    expect(page).toContain(
-      "devTools={canRestartDemo ? <DemoRestartButton action={resetDemoSessionAction} /> : null}",
-    );
+    /**
+     * M12f: the two demo controls are BACK on the conversation surface,
+     * and the gate got stricter rather than looser. The page no longer
+     * checks `isDebugSurfaceEnabled` on its own — it asks
+     * `operatorAccessAllowed`, which is all four conditions, the same
+     * ones `/dev` and `/dev/family-inbox` use.
+     */
+    expect(page).toContain("await operatorAccessAllowed()");
+    expect(page).toMatch(/operator \? \([\s\S]*<FamilyInboxLink label="Family view" \/>/);
+    expect(page).toMatch(/operator \? \([\s\S]*<DemoResetControl action=\{resetDemoAction\} \/>/);
+    // No developer vocabulary in the conversation UI. The caption is a
+    // prop and the page does not pass one, so this checks EXECUTABLE text
+    // — the comments above that wiring say the words in order to explain
+    // why they are absent.
+    const executable = page.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    expect(executable).not.toContain("(dev)");
+    expect(executable).not.toContain("development only");
+    expect(executable).not.toContain("DemoHint");
 
+    // `/dev` remains the operator page.
     const dev = fs.readFileSync("app/dev/page.tsx", "utf8");
     expect(dev).toContain("<DemoResetControl");
     expect(dev).toContain("<FamilyInboxLink />");

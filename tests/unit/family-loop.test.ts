@@ -20,6 +20,7 @@ import {
   resetM5Ids,
   withM5,
   type M5Store,
+  afterOfferShown,
   conversationUnderway,
 } from "./consent-fakes";
 
@@ -78,6 +79,7 @@ async function approve(store: M5Store, clock: Clock = fixedClock(NOW)) {
   await prepareOffer(d.consent, { userId: USER, conversationId: "conv-1", recentMessages: conversationUnderway(NOW) });
   const outcome = await handleConsentReply(d.consent, {
     userId: USER, text: "yes please", grantingMessageId: "msg-1",
+    recentMessages: afterOfferShown(TEXT, NOW),
   });
   if (outcome.outcome !== "approved") throw new Error(`expected approval, got ${outcome.outcome}`);
   return outcome;
@@ -97,6 +99,7 @@ describe("1. the exact-byte chain", () => {
     if (offer.outcome !== "offered") throw new Error("expected an offer");
     await handleConsentReply(d.consent, {
       userId: USER, text: "yes", grantingMessageId: "msg-1",
+      recentMessages: afterOfferShown(TEXT, NOW),
     });
     const sent = await sendApprovedOpportunity(d.send, { userId: USER, opportunityId: "opp-1" });
 
@@ -769,6 +772,7 @@ describe("7. the wellbeing topic goes all the way round", () => {
       userId: USER,
       text: "yes please",
       grantingMessageId: "msg-1",
+      recentMessages: afterOfferShown(WELLBEING_TEXT, NOW),
     });
     expect(approved.outcome).toBe("approved");
 
@@ -824,6 +828,7 @@ describe("7. the wellbeing topic goes all the way round", () => {
       userId: USER,
       text: "yes",
       grantingMessageId: "msg-1",
+      recentMessages: afterOfferShown(WELLBEING_TEXT, NOW),
     });
     await sendApprovedOpportunity(d.send, { userId: USER, opportunityId: "opp-w" });
 

@@ -26,13 +26,13 @@ import { DemoResetButton } from "./dev-tools";
  * from a feature. The marker is the whole fix; nothing was rewired, because
  * nothing was fake.
  */
-export function FamilyInboxLink() {
+export function FamilyInboxLink({ label = "Family inbox (dev)" }: { label?: string }) {
   return (
     <a
       href="/dev/family-inbox"
       className="inline-flex min-h-[2.75rem] items-center justify-center rounded-xl border-2 border-[var(--color-line)] bg-[var(--color-surface)] px-4 text-[0.95rem] font-medium hover:bg-[var(--color-surface-muted)]"
     >
-      Family inbox (dev)
+      {label}
     </a>
   );
 }
@@ -48,7 +48,19 @@ export function FamilyInboxLink() {
  * browser entirely. `tests/unit/production-ui.test.ts` scans the built
  * bundle rather than trusting this paragraph.
  */
-export function DemoResetControl({ action }: { action: () => Promise<{ ok: boolean }> }) {
+export function DemoResetControl({
+  action,
+  /**
+   * The caption under the button. Omitted on the CareLoop page (M12f):
+   * "development only" is a note to a developer, and the conversation
+   * surface is not where a developer is being addressed. The gate is the
+   * same either way — the label is not the gate.
+   */
+  note = "",
+}: {
+  action: () => Promise<{ ok: boolean }>;
+  note?: string;
+}) {
   return (
     <DemoResetButton
       action={action}
@@ -59,7 +71,7 @@ export function DemoResetControl({ action }: { action: () => Promise<{ ok: boole
       // button. In an expression — {"\u2026"}, as /debug uses — the escape
       // is real, which is why that file is correct and this one was not.
       pendingLabel="Resetting…"
-      note="development only"
+      note={note}
       failedNote="Reset failed — check the server log."
     />
   );

@@ -59,12 +59,58 @@ const DECLINE: readonly Rule[] = [
   { name: "dont_bother", pattern: /\b(don'?t|do not|dont) bother\b/ },
 ];
 
-/** Agreement. Anchored or bounded; never a bare substring. */
+/**
+ * A message that OPENS agreeably.
+ *
+ * Kept separate from the rest of agreement because it is the weakest
+ * evidence of the set, and the only one that says nothing whatsoever about
+ * what follows it. See `OPENER_MAX_WORDS`.
+ */
+const AFFIRMATIVE_OPENER: Rule = {
+  name: "affirmative_opener",
+  pattern: /^(yes|yeah|yep|yup|aye|ok|okay|sure|absolutely|definitely|certainly|please do|go ahead|go on)\b/,
+};
+
+/**
+ * How long a message may be and still be approved on its opening word alone.
+ *
+ * REPORTED FROM A LIVE BROWSER. The person said:
+ *
+ *     "Yeah, it was good. Tell me about something about weather."
+ *
+ * and CareLoop answered "Thank you - I'll send that to them now."
+ *
+ * "Yeah" was an answer to the question before last. The sentence then
+ * changed the subject, in the ordinary way people do - and the opener rule,
+ * anchored at the start and silent about the other forty characters,
+ * authorized a message to somebody's family.
+ *
+ * This is the same fault M9 fixed for "yes but later", surviving in the one
+ * place that fix did not reach. QUALIFIER caught hedges because hedges have
+ * a vocabulary. Changing the subject has none - the next clause can be about
+ * anything at all - so no list of disqualifying words could have caught this
+ * one. What distinguishes a yes from a sentence that merely begins with one
+ * is not which words follow, but that ANY do.
+ *
+ * So the bound is on length, and it is deliberately generous: six words fits
+ * every natural way of saying yes to this question ("yes please send it to
+ * them"), while the reported sentence is ten and the ones like it are longer
+ * still. A person who says yes at length is not refused - the explicit
+ * phrases below are unanchored and unbounded, so "that's very kind of you,
+ * yes, please send it" is approved by `send_it` on its own merits. The bound
+ * applies only where the evidence is a single opening word.
+ *
+ * Refusal is not bounded, and must never be: "no" is the safe answer, and a
+ * long sentence that begins with one still means it.
+ */
+const OPENER_MAX_WORDS = 6;
+
+function wordCount(text: string): number {
+  return text.length === 0 ? 0 : text.split(" ").length;
+}
+
+/** Agreement, explicitly stated. Unanchored and unbounded; never a bare substring. */
 const APPROVE: readonly Rule[] = [
-  {
-    name: "affirmative_opener",
-    pattern: /^(yes|yeah|yep|yup|aye|ok|okay|sure|absolutely|definitely|certainly|please do|go ahead|go on)\b/,
-  },
   { name: "send_it", pattern: /\b(send it|send that|send the message|please send|send it please)\b/ },
   { name: "go_ahead", pattern: /\bgo ahead\b/ },
   { name: "thats_fine", pattern: /\bthat'?s (fine|good|great|lovely|perfect)\b/ },
@@ -127,7 +173,13 @@ export function readConsent(raw: string): ConsentReading {
   const ambiguous = firstMatch(AMBIGUOUS, text);
   if (ambiguous) return { decision: "unclear", matchedRule: ambiguous };
 
-  const approve = firstMatch(APPROVE, text);
+  // Explicit agreement first, then the opener - which counts only when the
+  // message is substantially just the affirmation.
+  const approve =
+    firstMatch(APPROVE, text) ??
+    (wordCount(text) <= OPENER_MAX_WORDS && AFFIRMATIVE_OPENER.pattern.test(text)
+      ? AFFIRMATIVE_OPENER.name
+      : null);
 
   // A yes that takes itself back decides nothing. Checked BEFORE refusal so a
   // contradiction ("yes, not now") asks once more rather than terminating the

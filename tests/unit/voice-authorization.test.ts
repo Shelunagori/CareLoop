@@ -20,7 +20,7 @@ import { sha256Hex } from "@/core/share/text-hash";
 import type { ConversationsRepo } from "@/server/repositories/conversations";
 import type { MessagesRepo, StoredMessage } from "@/server/repositories/messages";
 import { createStore, resetIds } from "./detection-fakes";
-import { m5Deps, resetM5Ids, withM5, type M5Store , conversationUnderway} from "./consent-fakes";
+import { afterOfferShown, m5Deps, resetM5Ids, withM5, type M5Store , conversationUnderway} from "./consent-fakes";
 
 /**
  * What text-to-speech is allowed to say (M8, architecture review).
@@ -456,6 +456,7 @@ describe("4. the offer keeps its exact bytes", () => {
       userId: USER,
       text: "no thank you",
       grantingMessageId: "msg-1",
+      recentMessages: afterOfferShown(TEXT, NOW),
     });
 
     const { deps } = speakableDeps({ store, transcript });
@@ -517,6 +518,7 @@ describe("5. a closure is re-derived, never recited", () => {
       userId: USER,
       text: "yes please",
       grantingMessageId: "msg-1",
+      recentMessages: afterOfferShown(TEXT, NOW),
     });
     await sendApprovedOpportunity(d.send, { userId: USER, opportunityId: "opp-1" });
     const url = store.delivered[0]!.responseUrl;

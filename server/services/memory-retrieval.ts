@@ -52,7 +52,9 @@ export async function loadMemoryForTurn(
   );
 
   const profileCard = renderProfileCard(
-    userFacts.map((fact) => ({ key: fact.key, value: fact.value })),
+    // The evidence status travels with the fact (M12f): a candidate is
+    // usable context and must not be asserted back as established.
+    userFacts.map((fact) => ({ key: fact.key, value: fact.value, status: fact.status })),
   );
 
   const episodes = await retrieveEpisodes(deps, input);

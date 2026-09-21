@@ -32,6 +32,19 @@ export type NoraState =
   | "waiting_for_wake"
   /** A wake fired and the post-wake recording window is open. */
   | "listening"
+  /**
+   * A BOUNDED FOLLOW-UP WINDOW inside a conversation burst (M12f).
+   *
+   * Either just about to open or already recording — the same state for
+   * both, because from the person's side it is one thing: CareLoop has
+   * finished speaking and is waiting for their answer, without them
+   * having to say "Hey Nora" again.
+   *
+   * It is NOT armed. The wake detector stays down for the whole burst;
+   * the recorder owns the microphone, bounded by the same endpointing
+   * contract every wake turn uses.
+   */
+  | "listening_for_reply"
   /** The person pressed the microphone button. Nora stands down. */
   | "push_to_talk"
   /** Audio is with the transcriber. */
@@ -58,6 +71,15 @@ export type NoraInputs = {
   recorder: "off" | "recording" | "transcribing";
   /** Whether the recording in flight was started by a wake, not a press. */
   wakeTurn: boolean;
+  /**
+   * A conversation burst is open (M12f).
+   *
+   * Set after a voice-originated turn is SENT, cleared by every ending in
+   * `chat.tsx`. While it is true the wake detector is never armed: the
+   * burst's own bounded window is what listens, and two ways into the
+   * microphone at once is the thing this file exists to prevent.
+   */
+  inBurst: boolean;
   /** Anything at all in the composer, trimmed. */
   composerHasText: boolean;
   /**
@@ -100,7 +122,10 @@ export function noraState(input: NoraInputs): NoraState {
    * None of these is armed, so moving them above the configuration checks
    * cannot make `wakeIsArmed` true anywhere it was not.
    */
-  if (input.recorder === "recording") return input.wakeTurn ? "listening" : "push_to_talk";
+  if (input.recorder === "recording") {
+    if (!input.wakeTurn) return "push_to_talk";
+    return input.inBurst ? "listening_for_reply" : "listening";
+  }
   if (input.recorder === "transcribing") return "transcribing";
   if (input.speaking) return "speaking";
   if (input.sending) return "busy";
@@ -124,6 +149,21 @@ export function noraState(input: NoraInputs): NoraState {
 
   // Only their own typing reaches here; a transcript was handled above.
   if (input.composerHasText) return "paused_for_typing";
+
+  /**
+   * THE GAP BETWEEN THE REPLY ENDING AND THE MICROPHONE OPENING.
+   *
+   * Milliseconds, but the person is looking at the screen for exactly
+   * these milliseconds. Without this the headline would flash back to
+   * "Waiting for Hey Nora" and then to "Listening", which reads as the
+   * conversation having dropped them.
+   *
+   * ABOVE `waiting_for_wake`, so `wakeIsArmed` is false for the whole
+   * burst. That is the load-bearing part: the follow-up recorder is about
+   * to take the microphone, and a wake detector armed in this window
+   * could take it first.
+   */
+  if (input.inBurst) return "listening_for_reply";
 
   // Available, enabled, idle, and nothing of the person's is waiting.
   if (input.available === true) return "waiting_for_wake";
@@ -156,6 +196,11 @@ export function noraStateLabel(state: NoraState): string | null {
       return 'Nora is listening for "Hey Nora".';
     case "listening":
       return "Listening — stop speaking when you're done.";
+    case "listening_for_reply":
+      // The HEADLINE already says what state this is. The sentence's job
+      // is the thing a person would not guess: they do not have to say
+      // the wake word again.
+      return "Go ahead — you don't need to say \"Hey Nora\" again.";
     case "push_to_talk":
       return "Recording.";
     case "transcribing":
@@ -188,6 +233,8 @@ export function noraStateHeadline(state: NoraState): string | null {
       return 'Waiting for "Hey Nora"';
     case "listening":
       return "Listening";
+    case "listening_for_reply":
+      return "Listening for your reply";
     case "push_to_talk":
       return "Listening";
     case "transcribing":

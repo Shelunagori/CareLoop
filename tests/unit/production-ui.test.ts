@@ -39,21 +39,33 @@ describe("the environment predicate is the only switch", () => {
 describe("every development affordance on the home page is behind it", () => {
   const home = code("app/page.tsx");
 
-  it("M12e.3: there are none left — they moved to the operator surface", () => {
-    // Gating them was correct and was not enough. This is the page a
-    // reviewer records; a control labelled "(dev)" is still in shot.
-    for (const needle of ["DemoResetControl", "FamilyInboxLink", "DemoHint", "demoHint"]) {
+  it("M12f: the two demo controls are back, behind a STRICTER gate", () => {
+    /**
+     * M12e.3 moved them to `/dev` because "Reset demo — development only"
+     * and "Family inbox (dev)" read as scaffolding in a recording. The
+     * controls were never the problem; the labels were. They are back as
+     * "Family view" and "Reset demo", and the page now asks all four
+     * operator conditions instead of the one it used to.
+     */
+    expect(home).toContain("await operatorAccessAllowed()");
+    expect(home).toContain('<FamilyInboxLink label="Family view" />');
+    expect(home).toContain("<DemoResetControl action={resetDemoAction} />");
+    // The gate got stricter, not looser: the page no longer decides for
+    // itself with a single check.
+    expect(home).not.toMatch(/const isDev = isDebugSurfaceEnabled/);
+
+    // No developer vocabulary in the conversation UI. The caption is a
+    // prop, and the page passes none.
+    for (const needle of ["(dev)", "development only", "DemoHint", "demoHint"]) {
       expect(home).not.toContain(needle);
     }
-    // And they really are somewhere, behind the same four conditions.
+
+    // `/dev` is untouched and still offers both, with the caption.
     const operator = code("app/dev/page.tsx");
     expect(operator).toContain("<DemoResetControl");
     expect(operator).toContain("<FamilyInboxLink />");
-    expect(operator).toContain("isDebugSurfaceEnabled(process.env)");
-    expect(operator).toContain("authorizeDevSeed(process.env");
-    expect(operator).toContain("isLocalOperatorHost");
-    // Three notFound() calls: no token, no query parameter, no way in.
-    expect(operator.match(/notFound\(\)/g)).toHaveLength(3);
+    expect(operator).toContain('note="development only"');
+    expect(operator).toContain("await operatorAccessAllowed()");
   });
 
   it("and so is the setup guidance on the no-session screen", () => {
@@ -76,6 +88,7 @@ describe("the dev components are server components, so production never bundles 
   it.each([
     "app/_components/dev-operator.tsx",
     "app/dev/page.tsx",
+    "server/auth/operator-access.ts",
   ])("%s carries no client directive", (path) => {
     expect(code(path)).not.toContain('"use client"');
   });

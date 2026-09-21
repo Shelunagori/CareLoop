@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
@@ -33,7 +33,10 @@ vi.mock("@/app/_components/nora", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/app/_components/nora")>();
   return {
     ...actual,
-    fetchNoraStatus: async () => status.value,
+    // A FRESH OBJECT, like the real one (M12g). Returning the same
+    // reference made `setNoraStatus` a no-op re-render and hid a live
+    // defect — see tests/ui/nora-endpointing.test.tsx §17.
+    fetchNoraStatus: async () => ({ ...status.value }),
     noraBrowserSupported: () => true,
     startNora: async (options: { onWake: () => void }) => {
       engine.starts += 1;
@@ -389,5 +392,240 @@ describe("14. the voice-origin indicator", () => {
     watcher.decide("speech_ended");
     await waitFor(() => expect(composer().value).toBe("good morning"));
     expect(screen.getAllByRole("textbox")).toHaveLength(1);
+  });
+});
+
+/**
+ * 15. THE CONVERSATION BURST (M12f).
+ *
+ * "Hey Nora" once, then answer the reply without saying it again. One
+ * bounded window per reply, the same endpointing contract as a wake turn,
+ * and silence ends the burst rather than extending it.
+ */
+describe("15. one wake per burst, not one per turn", () => {
+  async function sendAWakeTurn() {
+    await wake();
+    watcher.decide("speech_ended");
+    await waitFor(() => expect(composer().value).toBe("good morning"));
+    fireEvent.click(screen.getByRole("button", { name: /^send$/i }));
+    await waitFor(() => expect(composer().value).toBe(""));
+  }
+
+  it("opens a follow-up window after the reply, with no second wake", async () => {
+    const wakes = engine.starts;
+    await sendAWakeTurn();
+
+    await waitFor(() => expect(screen.getByText(/listening for your reply/i)).toBeTruthy());
+    expect(await screen.findByRole("button", { name: /stop recording/i })).toBeTruthy();
+    // A fresh bounded window — a recording, not a re-armed wake engine.
+    expect(watcher.starts).toBe(2);
+    expect(engine.starts).toBe(wakes + 1); // only the original start
+  });
+
+  it("the follow-up transcript is still shown and still needs Send", async () => {
+    await sendAWakeTurn();
+    await waitFor(() => expect(screen.getByText(/listening for your reply/i)).toBeTruthy());
+
+    watcher.decide("speech_ended");
+    await waitFor(() => expect(composer().value).toBe("good morning"));
+
+    expect(screen.getByRole("button", { name: /^send$/i })).toBeTruthy();
+    const calls = (globalThis.fetch as unknown as { mock: { calls: string[][] } }).mock.calls;
+    expect(calls.filter((c) => c[0] === "/api/chat")).toHaveLength(1);
+  });
+
+  it("a spoken yes is a transcript, never an authorization", async () => {
+    // The consent invariant, stated where the follow-up could most easily
+    // have broken it. Nothing leaves without a press, in a burst or out
+    // of one.
+    await sendAWakeTurn();
+    await waitFor(() => expect(screen.getByText(/listening for your reply/i)).toBeTruthy());
+    watcher.decide("speech_ended");
+    await waitFor(() => expect(composer().value).toBe("good morning"));
+    const calls = (globalThis.fetch as unknown as { mock: { calls: string[][] } }).mock.calls;
+    expect(calls.filter((c) => c[0] === "/api/chat")).toHaveLength(1);
+  });
+
+  it("silence in the follow-up ends the burst and waits for the wake word again", async () => {
+    await sendAWakeTurn();
+    await waitFor(() => expect(screen.getByText(/listening for your reply/i)).toBeTruthy());
+
+    watcher.decide("no_speech");
+
+    await waitFor(() => expect(screen.getByText(/waiting for .Hey Nora./i)).toBeTruthy());
+    expect(screen.queryByText(/listening for your reply/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: /end voice session/i })).toBeNull();
+  });
+
+  it("exactly ONE window per reply — clearing the composer opens no second one", async () => {
+    await sendAWakeTurn();
+    await waitFor(() => expect(screen.getByText(/listening for your reply/i)).toBeTruthy());
+    watcher.decide("speech_ended");
+    await waitFor(() => expect(composer().value).toBe("good morning"));
+    const windows = watcher.starts;
+
+    // Clear resolves the draft. That must not be read as "ready for another".
+    fireEvent.change(composer(), { target: { value: "" } });
+    await waitFor(() => expect(composer().value).toBe(""));
+    expect(watcher.starts).toBe(windows);
+  });
+
+  it("turning Nora off mid-burst ends it", async () => {
+    await sendAWakeTurn();
+    await waitFor(() => expect(screen.getByText(/listening for your reply/i)).toBeTruthy());
+
+    fireEvent.click(toggle());
+
+    await waitFor(() => expect(toggle().getAttribute("aria-checked")).toBe("false"));
+    expect(screen.queryByText(/listening for your reply/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: /end voice session/i })).toBeNull();
+  });
+});
+
+/**
+ * 16. ENDING A BURST RELEASES ITS MICROPHONE (M12f).
+ *
+ * Found by a flaky test rather than by reading the code, which is the
+ * honest way to find a race. `startRecording` awaits a permission prompt
+ * and a MediaRecorder; a person can press "End voice session" inside that
+ * gap. Before the fix the recorder then opened into a burst that no longer
+ * existed — the interface said "Listening", nothing would ever stop it,
+ * and the microphone stayed live.
+ */
+describe("16. a burst that ends takes its microphone with it", () => {
+  async function sendAWakeTurn() {
+    await wake();
+    watcher.decide("speech_ended");
+    await waitFor(() => expect(composer().value).toBe("good morning"));
+    fireEvent.click(screen.getByRole("button", { name: /^send$/i }));
+    await waitFor(() => expect(composer().value).toBe(""));
+  }
+
+  it("End voice session closes an open follow-up window", async () => {
+    await sendAWakeTurn();
+    await waitFor(() => expect(screen.getByText(/listening for your reply/i)).toBeTruthy());
+    expect(await screen.findByRole("button", { name: /stop recording/i })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /end voice session/i }));
+
+    await waitFor(() => expect(screen.getByText(/waiting for .Hey Nora./i)).toBeTruthy());
+    // No recorder left behind, and the watcher was released with it.
+    expect(screen.queryByRole("button", { name: /stop recording/i })).toBeNull();
+    expect(watcher.stops).toBeGreaterThanOrEqual(watcher.starts);
+  });
+
+  it("ending it WHILE the microphone is opening leaves nothing running", async () => {
+    /**
+     * The race, forced rather than hoped for.
+     *
+     * `startRecording` awaits `getUserMedia`. Here that await is held open
+     * until the test releases it, so "End voice session" is pressed with
+     * the recorder genuinely mid-flight — which is what a person does
+     * while a permission prompt or a slow device is still resolving.
+     *
+     * Without the abort check inside `beginRecording`, the recorder opens
+     * afterwards into a burst that no longer exists: the interface says
+     * "Listening", nothing will ever stop it, and the microphone stays
+     * live. Removing that check turns this red.
+     */
+    let release!: () => void;
+    const opening = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await sendAWakeTurn();
+
+    vi.stubGlobal("navigator", {
+      mediaDevices: {
+        async getUserMedia() {
+          await opening;
+          return { getTracks: () => [{ stop: () => {} }] };
+        },
+      },
+    });
+
+    await waitFor(() => expect(screen.getByText(/listening for your reply/i)).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: /end voice session/i }));
+
+    // NOW let the microphone finish opening.
+    await act(async () => {
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(screen.queryByRole("button", { name: /stop recording/i })).toBeNull();
+    expect(screen.queryByText(/listening for your reply/i)).toBeNull();
+    expect(screen.getByText(/waiting for .Hey Nora./i)).toBeTruthy();
+  });
+
+  it("typing instead of answering also closes it", async () => {
+    await sendAWakeTurn();
+    await waitFor(() => expect(screen.getByText(/listening for your reply/i)).toBeTruthy());
+
+    fireEvent.change(composer(), { target: { value: "I'll type instead" } });
+
+    await waitFor(() =>
+      expect(screen.getByText(/paused while you have a message/i)).toBeTruthy(),
+    );
+    expect(screen.queryByRole("button", { name: /end voice session/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /stop recording/i })).toBeNull();
+  });
+});
+
+/**
+ * 17. THE FOLLOW-UP WINDOW MUST NOT CANCEL ITSELF (M12g).
+ *
+ * Reported from a live browser: "Listening for your reply" on screen,
+ * nothing listening, and "Hey Nora" ignored — until End voice session,
+ * after which the wake word worked again.
+ *
+ * The cause was a self-cancelling effect. The window's own revalidation
+ * calls `setNoraStatus` with the object `fetchNoraStatus` returned; that
+ * object was in the effect's dependency list, so storing it re-ran the
+ * effect, whose cleanup cancelled the open the first run had just started.
+ * `followUpOpenedRef` then stopped the second run from opening another, so
+ * the burst sat there with no microphone and a paused wake engine.
+ *
+ * It needed BOTH real-world properties to show up, which is why the suite
+ * missed it: a status object with a fresh identity (the fake returned the
+ * same reference) and a `getUserMedia` slower than React's render flush
+ * (the fake resolved in a microtask). Both are forced here.
+ */
+describe("17. a follow-up window survives its own revalidation", () => {
+  it("opens even when the status object is new and the microphone is slow", async () => {
+    let release!: () => void;
+    const opening = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    await wake();
+    watcher.decide("speech_ended");
+    await waitFor(() => expect(composer().value).toBe("good morning"));
+
+    // A microphone that takes a moment, like every real one.
+    vi.stubGlobal("navigator", {
+      mediaDevices: {
+        async getUserMedia() {
+          await opening;
+          return { getTracks: () => [{ stop: () => {} }] };
+        },
+      },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /^send$/i }));
+    await waitFor(() => expect(screen.getByText(/listening for your reply/i)).toBeTruthy());
+
+    // Let the revalidation land and React re-render before the microphone
+    // finishes opening — the exact ordering that killed it.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await act(async () => {
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    // The window is genuinely open.
+    expect(await screen.findByRole("button", { name: /stop recording/i })).toBeTruthy();
+    expect(screen.getByText(/listening for your reply/i)).toBeTruthy();
   });
 });

@@ -1,9 +1,8 @@
 import Link from "next/link";
-import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 import { resetDemoAction } from "@/app/_actions/demo";
 import { DemoResetControl, FamilyInboxLink } from "@/app/_components/dev-operator";
-import { authorizeDevSeed, isDebugSurfaceEnabled, isLocalOperatorHost } from "@/server/config";
+import { operatorAccessAllowed } from "@/server/auth/operator-access";
 
 export const dynamic = "force-dynamic";
 
@@ -26,19 +25,10 @@ export const dynamic = "force-dynamic";
  * is not a back door; it is the same door, with the controls behind it.
  */
 export default async function DevOperatorPage() {
-  if (!isDebugSurfaceEnabled(process.env)) notFound();
-  // Asserts that a secret is CONFIGURED, which is the environment
-  // condition. It is not a caller check — the gate above and the host check
-  // below are what keep this off a deployment and off the network.
-  const auth = authorizeDevSeed(process.env, process.env.CARELOOP_DEV_SEED_SECRET ?? null);
-  if (!auth.allowed) notFound();
-
-  const requestHeaders = await headers();
-  const local = isLocalOperatorHost({
-    host: requestHeaders.get("host"),
-    forwardedHost: requestHeaders.get("x-forwarded-host"),
-  });
-  if (!local) notFound();
+  // The same four conditions as every other operator surface, from one
+  // function (M12f). A bare 404 otherwise: the route does not advertise
+  // its own existence.
+  if (!(await operatorAccessAllowed())) notFound();
 
   return (
     <main className="mx-auto max-w-2xl space-y-8 px-6 py-10">
@@ -56,7 +46,7 @@ export default async function DevOperatorPage() {
           Deletes the rows this fixture owns and seeds them again through the
           production pipeline. Conversations and messages are left alone.
         </p>
-        <DemoResetControl action={resetDemoAction} />
+        <DemoResetControl action={resetDemoAction} note="development only" />
       </section>
 
       <section className="space-y-3">
