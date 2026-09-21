@@ -13,7 +13,7 @@ import { sha256Hex } from "@/core/share/text-hash";
 import { renderFamilyEmail } from "@/core/family/email";
 import { Chat, type PendingOffer } from "@/app/_components/chat";
 import { createStore, resetIds } from "../unit/detection-fakes";
-import { m5Deps, resetM5Ids, withM5, type M5Store } from "../unit/consent-fakes";
+import { m5Deps, resetM5Ids, withM5, type M5Store , conversationUnderway} from "../unit/consent-fakes";
 
 /**
  * THE CHAIN. The strongest claim this project makes.
@@ -99,7 +99,7 @@ describe("one sentence, six surfaces, zero edits", () => {
     });
 
     // 1. stored -> offered
-    const offer = await prepareOffer(d.consent, { userId: USER, recentMessages: [] });
+    const offer = await prepareOffer(d.consent, { userId: USER, conversationId: "conv-1", recentMessages: conversationUnderway(NOW) });
     if (offer.outcome !== "offered") throw new Error("expected an offer");
     const stored = store.opportunities[0].renderedText!;
 
@@ -201,7 +201,7 @@ describe("one sentence, six surfaces, zero edits", () => {
     // Any provider reachable from the send path would show up here.
     (d.send as unknown as { familyRender?: unknown }).familyRender = { render: llm };
 
-    await prepareOffer(d.consent, { userId: USER, recentMessages: [] });
+    await prepareOffer(d.consent, { userId: USER, conversationId: "conv-1", recentMessages: conversationUnderway(NOW) });
     await handleConsentReply(d.consent, {
       userId: USER, text: "yes", grantingMessageId: "msg-1",
     });
@@ -227,7 +227,7 @@ describe("one sentence, six surfaces, zero edits", () => {
     });
 
     for (const id of ["opp-1", "opp-2"]) {
-      await prepareOffer(d.consent, { userId: USER, recentMessages: [] });
+      await prepareOffer(d.consent, { userId: USER, conversationId: "conv-1", recentMessages: conversationUnderway(NOW) });
       await handleConsentReply(d.consent, {
         userId: USER, text: "yes", grantingMessageId: `msg-${id}`,
       });

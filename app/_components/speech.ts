@@ -62,7 +62,21 @@ export type SpeakOptions = {
    * starts.
    */
   onEnded?: () => void;
+  /**
+   * Playback speed (M12d). 1 is the synthesized speed and the default.
+   *
+   * This is the browser's own `playbackRate` on the same audio element, so
+   * nothing is re-synthesized, no provider setting changes, and the bytes
+   * are byte-identical to the ones the server authorized. `preservesPitch`
+   * is set explicitly alongside it: a slower voice that also drops in
+   * pitch is the "hack" this is deliberately not.
+   */
+  rate?: number;
 };
+
+/** The only speeds offered. Two, because a slider is a decision to make. */
+export const SPEECH_RATES = { normal: 1, slower: 0.8 } as const;
+export type SpeechRate = keyof typeof SPEECH_RATES;
 
 export async function speak(request: SpeakRequest, options: SpeakOptions = {}): Promise<void> {
   // Never two at once.
@@ -80,6 +94,12 @@ export async function speak(request: SpeakRequest, options: SpeakOptions = {}): 
   const blob = await response.blob();
   const url = URL.createObjectURL(blob);
   const audio = new Audio(url);
+  if (options.rate !== undefined && options.rate !== 1) {
+    // Order matters: `preservesPitch` before `playbackRate`, so no frame is
+    // ever rendered at the wrong pitch.
+    audio.preservesPitch = true;
+    audio.playbackRate = options.rate;
+  }
   current = audio;
   currentUrl = url;
 
@@ -103,8 +123,22 @@ export async function speak(request: SpeakRequest, options: SpeakOptions = {}): 
   }
 }
 
+/**
+ * Three failures, three sentences (M12d recovery audit).
+ *
+ * It used to be two, with `blocked` folded into the generic one — so a
+ * person whose browser had simply refused to autoplay was told the same
+ * thing as somebody whose provider was down, and neither was told that the
+ * reply is still there to read. Losing the audio costs nothing as long as
+ * that is said.
+ */
 export function speakMessage(reason: SpeakFailure): string {
-  return reason === "unavailable"
-    ? "Reading aloud isn't set up here."
-    : "I couldn't play that aloud.";
+  switch (reason) {
+    case "unavailable":
+      return "Reading aloud isn't set up here. You can still read it on screen.";
+    case "blocked":
+      return "The sound was blocked. Press the speaker button to try again.";
+    case "failed":
+      return "I couldn't read that aloud, but you can still read it here.";
+  }
 }

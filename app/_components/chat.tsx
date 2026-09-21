@@ -16,8 +16,26 @@ import {
   SpeakError,
   speakMessage,
   stopSpeaking,
+  SPEECH_RATES,
   type SpeakRequest,
+  type SpeechRate,
 } from "./speech";
+import {
+  fetchNoraStatus,
+  msUntilExpiry,
+  noraBrowserSupported,
+  noraMessage,
+  NoraError,
+  startNora,
+  type NoraSession,
+  type NoraStatus,
+} from "./nora";
+import { startEndpointing, type Endpointer } from "./endpoint";
+import { recoveryText } from "./recovery";
+import { NORA_MODEL_PATH } from "@/core/nora/config";
+import type { NoraUnavailableReason } from "@/core/nora/availability";
+import { noraState, noraStateHeadline, noraStateLabel, wakeIsArmed } from "@/core/nora/state";
+import type { EndpointOutcome } from "@/core/voice/endpoint";
 
 export type ChatMessage = {
   id: string;
@@ -45,6 +63,8 @@ type TurnEvent =
       entityName: string;
       renderedText: string;
       block: string;
+      /** Why the offer appeared, decided by the server. Null when unstated. */
+      preamble: string | null;
     }
   | { type: "state"; pendingOffer: PendingOffer | null; messageId?: string | null };
 
@@ -74,6 +94,12 @@ export function Chat(props: {
   /** Development-only affordances. Never rendered in production. */
   devTools?: React.ReactNode;
   demoHint?: React.ReactNode;
+  /**
+   * M12d: one bounded proactive opening, decided on the server from an
+   * event the person themselves reported. `null` whenever there is nothing
+   * genuinely useful to open with, which is most of the time.
+   */
+  openingLine?: string | null;
 }) {
   const [conversationId, setConversationId] = useState(props.initialConversationId);
   const [messages, setMessages] = useState<ChatMessage[]>(props.initialMessages);
@@ -91,8 +117,111 @@ export function Chat(props: {
    * plays on page load.
    */
   const [voiceModeOn, setVoiceModeOn] = useState(false);
+  /**
+   * The opening is shown at most once per browser session.
+   *
+   * Deliberately `sessionStorage` and not a database column: this is a
+   * greeting, the worst case of losing the flag is seeing it twice, and a
+   * write on page load for a pleasantry is not a trade worth making.
+   *
+   * Read once during render and written in an effect, so nothing here sets
+   * state from an effect just to learn something the browser already knows.
+   */
+  const openingSeenRef = useRef(false);
+  const openingReadRef = useRef(false);
+  if (!openingReadRef.current && typeof window !== "undefined") {
+    openingReadRef.current = true;
+    try {
+      openingSeenRef.current =
+        window.sessionStorage.getItem("careloop.opening") === (props.openingLine ?? "");
+    } catch {
+      openingSeenRef.current = false;
+    }
+  }
+  const [openingDismissed, setOpeningDismissed] = useState(false);
+  useEffect(() => {
+    if (!props.openingLine) return;
+    try {
+      window.sessionStorage.setItem("careloop.opening", props.openingLine);
+    } catch {
+      // Private mode, blocked storage. Showing it again is the failure, and
+      // it is a small one.
+    }
+  }, [props.openingLine]);
   const [speaking, setSpeaking] = useState(false);
+  /**
+   * How fast replies are read out (M12d). Remembered per browser, because
+   * somebody who needs it slower needs it slower every time. It changes
+   * the PLAYBACK of bytes the server already authorized — nothing is
+   * re-synthesized and nothing about the words changes.
+   */
+  const [speechRate, setSpeechRate] = useState<SpeechRate>("normal");
+  const speechRateRef = useRef<SpeechRate>("normal");
+  const rateReadRef = useRef(false);
+  if (!rateReadRef.current && typeof window !== "undefined") {
+    rateReadRef.current = true;
+    try {
+      if (window.localStorage.getItem("careloop.speech-rate") === "slower") {
+        speechRateRef.current = "slower";
+      }
+    } catch {
+      /* private mode: the default speed is a perfectly good default */
+    }
+  }
+  useEffect(() => {
+    setSpeechRate(speechRateRef.current);
+  }, []);
   const recordingRef = useRef<Recording | null>(null);
+
+  /**
+   * NORA — the optional wake word.
+   *
+   * Off by default, on every load. `noraOn` is what the person asked for;
+   * `noraStatus` is what the SERVER allows, and the two are kept apart on
+   * purpose: a remembered preference is not a permission. Nothing listens
+   * unless both agree, which is what makes a tab left open across the cutoff
+   * — or a `localStorage` flag from last week — harmless.
+   */
+  const [noraOn, setNoraOn] = useState(false);
+  const [noraStarting, setNoraStarting] = useState(false);
+  const [noraStatus, setNoraStatus] = useState<NoraStatus | null>(null);
+  const [noraNote, setNoraNote] = useState<string | null>(null);
+  const noraRef = useRef<NoraSession | null>(null);
+  const onWakeRef = useRef<() => void>(() => {});
+  const onEndpointRef = useRef<(outcome: EndpointOutcome) => void>(() => {});
+  /** The end-of-turn watcher, alive only while a post-wake recording is. */
+  const endpointerRef = useRef<Endpointer | null>(null);
+  /**
+   * Whether the recording in flight was started by a wake or by a press.
+   * A ref AND a state: callbacks read the ref, the state machine reads the
+   * state. Keeping them in step in one setter beats a stale closure deciding
+   * whether to tear a microphone down.
+   */
+  const wakeTurnRef = useRef(false);
+  const [wakeTurn, setWakeTurn] = useState(false);
+  const markWakeTurn = useCallback((value: boolean) => {
+    wakeTurnRef.current = value;
+    setWakeTurn(value);
+  }, []);
+  /**
+   * Whether what is in the composer came from a TRANSCRIPT.
+   *
+   * A ref, derived at render, rather than state kept in step by an effect:
+   * the one fact it depends on is whether the composer is empty, and that
+   * is already on screen. Editing a transcript keeps the flag — an edited
+   * draft is still a draft, and the person keeps the Clear button.
+   */
+  const draftFromVoiceRef = useRef(false);
+  /** The arming decision last applied to the engine, so it is applied once. */
+  const appliedArmRef = useRef<boolean | null>(null);
+  const armedRef = useRef(false);
+  /**
+   * Forward reference to the teardown, which is defined below the recorder
+   * that needs to call it. A ref rather than a reorder: the recorder's
+   * callbacks are the ones that must never capture a stale anything.
+   */
+  const teardownNoraRef = useRef<() => Promise<void>>(async () => {});
+
   const endRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const micSupported = useRef(false);
@@ -110,11 +239,11 @@ export function Chat(props: {
     try {
       // Resolves when playback BEGINS; `onEnded` is the moment it stops, which
       // is when the Stop control retires and listening may resume.
-      await speak(request, { onEnded: done });
+      await speak(request, { onEnded: done, rate: SPEECH_RATES[speechRateRef.current] });
     } catch (error) {
       // Never fatal: the words are already on screen.
       setVoiceNote(
-        error instanceof SpeakError ? speakMessage(error.reason) : "I couldn't play that aloud.",
+        error instanceof SpeakError ? speakMessage(error.reason) : recoveryText("speech_failed"),
       );
       done();
     }
@@ -126,6 +255,7 @@ export function Chat(props: {
       if (!text || status === "sending") return;
 
       setError(null);
+      setOpeningDismissed(true);
       setStatus("sending");
       setConsentPending(consent);
       if (consent === null) setInput("");
@@ -174,6 +304,21 @@ export function Chat(props: {
             return;
           }
           if (event.type === "offer") {
+            /**
+             * WHY the offer appeared, if the server said. It is appended to
+             * the bubble rather than drawn on the card, so that the live turn
+             * and the persisted message - reply, reason, block - end up
+             * reading the same way. The sentence is the server's; nothing
+             * here composes or edits it.
+             */
+            if (event.preamble !== null) {
+              const reason = event.preamble;
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === draftId ? { ...m, content: `${m.content}\n\n${reason}` } : m,
+                ),
+              );
+            }
             // An offer arrived as FIELDS. The exact bytes come from the
             // server; nothing here rebuilds or reformats them.
             setOffer({
@@ -224,7 +369,7 @@ export function Chat(props: {
         // The assistant turn was never persisted server-side, so showing a
         // partial bubble would be a lie that vanishes on refresh. Drop it.
         setMessages((prev) => prev.filter((m) => m.id !== draftId));
-        setError("Sorry, I couldn't send that just now. Please try again.");
+        setError(recoveryText("chat_failed"));
       } finally {
         setStatus("idle");
         setConsentPending(null);
@@ -233,10 +378,41 @@ export function Chat(props: {
     [conversationId, status, voiceModeOn, readAloud],
   );
 
+  /** Releases the end-of-turn watcher. Safe from anywhere, any number of times. */
+  const dropEndpointer = useCallback(() => {
+    endpointerRef.current?.stop();
+    endpointerRef.current = null;
+  }, []);
+
+  /**
+   * Ends a recording and throws the audio away.
+   *
+   * The no-speech path. Nothing is transcribed, nothing reaches the
+   * composer, and nothing the person had already written is touched — a
+   * wake that heard silence must cost them nothing at all.
+   */
+  const cancelRecording = useCallback(
+    (note: string | null) => {
+      dropEndpointer();
+      const recording = recordingRef.current;
+      recordingRef.current = null;
+      recording?.cancel();
+      if (note !== null) setVoiceNote(note);
+      setVoice("off");
+      markWakeTurn(false);
+    },
+    [dropEndpointer, markWakeTurn],
+  );
+
   const finishRecording = useCallback(async () => {
     const recording = recordingRef.current;
     if (!recording) return;
     recordingRef.current = null;
+    // Before anything awaits: the turn is over, so the watcher is over. On
+    // the automatic path it has already stopped itself; on the Stop-button
+    // path this is the only thing that will.
+    dropEndpointer();
+    const wasWake = wakeTurnRef.current;
     setVoice("transcribing");
 
     try {
@@ -246,6 +422,12 @@ export function Chat(props: {
       // was heard before it becomes a message - a mishearing that turns
       // itself into an irreversible action is the failure this prevents.
       setInput(text);
+      // The composer now holds something the person has not resolved. Until
+      // they do, the wake detector stays down — see core/nora/state.ts.
+      // Any transcript, not only a wake one: a pressed recording also
+      // leaves words CareLoop heard rather than words they typed.
+      void wasWake;
+      draftFromVoiceRef.current = true;
       composerRef.current?.focus();
     } catch (error) {
       // Two different apologies, because they are two different situations.
@@ -254,18 +436,32 @@ export function Chat(props: {
       // voice for our bug. Either way nothing is sent and nothing is lost.
       setVoiceNote(
         error instanceof NothingHeardError
-          ? "I didn't catch that. Could you try again?"
-          : "Sorry, that recording didn't work. Please try again.",
+          ? recoveryText("no_speech")
+          : recoveryText("transcription_failed"),
       );
     } finally {
       setVoice("off");
+      markWakeTurn(false);
+      /**
+       * NOTHING RE-ARMS HERE, ON PURPOSE.
+       *
+       * This is where the browser bug lived: the turn finished, this line
+       * re-armed the wake detector, and "good morning" sat in the composer
+       * with a live wake word able to overwrite it. Arming is now a
+       * CONSEQUENCE of state rather than a call — the effect below matches
+       * the engine to `wakeIsArmed(...)`, which cannot be true while the
+       * composer holds anything. Deleting the call is the fix; the state
+       * machine is what makes the deletion safe.
+       */
     }
-  }, []);
+  }, [dropEndpointer, markWakeTurn]);
 
-  const beginRecording = useCallback(async () => {
+  const beginRecording = useCallback(
+    async (source: "press" | "wake" = "press") => {
     setError(null);
     setVoiceNote(null);
     stopSpeaking();
+    markWakeTurn(source === "wake");
     try {
       recordingRef.current = await startRecording({
         // The recorder has a ceiling, and a ceiling that fires while the
@@ -274,26 +470,427 @@ export function Chat(props: {
         // runs; all that is left is to finish the turn the way the person
         // would have - transcribe, show the words, and wait for Send.
         onLimitReached: () => {
-          setVoiceNote("That's as long as I can record at once — here's what I heard.");
+          setVoiceNote(recoveryText("recording_limit"));
           void finishRecording();
         },
+        /**
+         * AUTOMATIC END OF TURN, AND ONLY AFTER A WAKE.
+         *
+         * Push-to-talk is untouched: no observer is attached, the person
+         * presses Stop exactly as they always have. A wake turn has nobody
+         * to press anything, which is the entire point of a wake word, so
+         * that one gets a watcher — bounded, attached to this recording's
+         * own stream, and released the moment the turn ends.
+         */
+        onStream:
+          source === "wake"
+            ? (stream) => {
+                endpointerRef.current = startEndpointing({
+                  stream,
+                  onDecision: (outcome) => {
+                    // The watcher has already stopped itself by now.
+                    endpointerRef.current = null;
+                    onEndpointRef.current(outcome);
+                  },
+                });
+              }
+            : undefined,
       });
       // From here on this person hears replies. Nothing plays before they
       // have asked for voice at least once.
       setVoiceModeOn(true);
       setVoice("recording");
     } catch (error) {
+      dropEndpointer();
       setVoiceNote(
         error instanceof MicrophoneError
           ? microphoneMessage(error.reason)
           : microphoneMessage("failed"),
       );
       setVoice("off");
+      // A wake turn that cannot open the microphone means the wake engine
+      // has lost it too. Nora comes down; typing and the button are
+      // unaffected and say so themselves.
+      if (source === "wake") {
+        markWakeTurn(false);
+        void teardownNoraRef.current();
+      }
     }
-  }, [finishRecording]);
+    },
+    [finishRecording, dropEndpointer, markWakeTurn],
+  );
+
+  /* ---------------------------------------------------------------- */
+  /* Nora — the optional wake word                                     */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * THE ONE ENDING. Every path that stops Nora comes through here: the
+   * person's toggle, an unmount, the cutoff passing, an engine failure, a
+   * revalidation that comes back unavailable. `stop()` is itself idempotent,
+   * so calling this twice is not a bug — leaving a listener behind once is.
+   */
+  const teardownNora = useCallback(async () => {
+    // The watcher first: it is the only thing holding an audio graph, and it
+    // must not outlive the engine that justified opening one.
+    dropEndpointer();
+    // A wake turn in flight is abandoned rather than transcribed. Whatever
+    // is already in the composer is left exactly as it is — turning Nora off
+    // must never cost somebody words they had written or already dictated.
+    if (wakeTurnRef.current && recordingRef.current !== null) {
+      const recording = recordingRef.current;
+      recordingRef.current = null;
+      recording.cancel();
+      setVoice("off");
+    }
+    markWakeTurn(false);
+    appliedArmRef.current = null;
+    const session = noraRef.current;
+    noraRef.current = null;
+    setNoraOn(false);
+    setNoraStarting(false);
+    if (session) await session.stop();
+  }, [dropEndpointer, markWakeTurn]);
+
+  useEffect(() => {
+    teardownNoraRef.current = teardownNora;
+  }, [teardownNora]);
+
+  /**
+   * Whether this BUILD carries what Nora needs.
+   *
+   * Not an eligibility check — the server owns that, and this cannot make
+   * Nora available. It answers a smaller question: is there any point
+   * asking. A deployment with no Picovoice configuration never fetches the
+   * status, never renders the control, and is byte-identical to CareLoop
+   * before Nora existed, which is also what every deployment becomes again
+   * once the keys are removed after the cutoff.
+   */
+  const noraPossible =
+    (process.env.NEXT_PUBLIC_PICOVOICE_ACCESS_KEY ?? "").trim().length > 0 &&
+    (process.env.NEXT_PUBLIC_NORA_KEYWORD_PATH ?? "").trim().length > 0;
+
+  /** The toggle turning ON. Server first, credentials second, engine last. */
+  const enableNora = useCallback(async () => {
+    setNoraNote(null);
+    setNoraStarting(true);
+
+    // 1. THE SERVER DECIDES. Asked every time, not read from the value
+    //    fetched on load: the answer can have changed since, and this is the
+    //    moment a microphone is about to open.
+    const status = await fetchNoraStatus();
+    setNoraStatus(status);
+    if (!status.available) {
+      setNoraStarting(false);
+      setNoraOn(false);
+      setNoraNote(noraMessage(status.reason ?? "initialization_failed"));
+      return;
+    }
+
+    const accessKey = process.env.NEXT_PUBLIC_PICOVOICE_ACCESS_KEY ?? "";
+    const keywordPath = process.env.NEXT_PUBLIC_NORA_KEYWORD_PATH ?? "";
+    if (accessKey.length === 0 || keywordPath.length === 0) {
+      // The server said configured and the bundle disagrees. Say the same
+      // thing either way; a person cannot act on which half is missing.
+      setNoraStarting(false);
+      setNoraOn(false);
+      setNoraNote(noraMessage("not_configured"));
+      return;
+    }
+
+    try {
+      // 2. Only after a successful start is Nora "on". A half-built engine
+      //    tears itself down inside startNora and throws; nothing here has
+      //    to remember to clean up after it.
+      const session = await startNora({
+        accessKey,
+        keywordPath,
+        modelPath: NORA_MODEL_PATH,
+        onWake: () => onWakeRef.current(),
+        onFailure: (reason: NoraUnavailableReason) => {
+          noraRef.current = null;
+          setNoraOn(false);
+          setNoraNote(noraMessage(reason));
+        },
+      });
+      noraRef.current = session;
+      // `startNora` subscribed, so the engine is already armed and the
+      // effect below must not immediately re-ask the server for permission
+      // it has just been given.
+      appliedArmRef.current = true;
+      setNoraOn(true);
+    } catch (error) {
+      setNoraOn(false);
+      setNoraNote(noraMessage(error instanceof NoraError ? error.reason : "initialization_failed"));
+    } finally {
+      setNoraStarting(false);
+    }
+  }, []);
+
+  const rememberNora = (value: "on" | "off") => {
+    try {
+      window.localStorage.setItem("careloop.nora", value);
+    } catch {
+      // Private mode, blocked storage. A convenience, never load-bearing:
+      // the preference is not the permission, and losing it costs one click.
+    }
+  };
+
+  const toggleNora = useCallback(() => {
+    if (noraOn || noraRef.current !== null) {
+      rememberNora("off");
+      void teardownNora();
+      return;
+    }
+    rememberNora("on");
+    void enableNora();
+  }, [noraOn, enableNora, teardownNora]);
+
+  /**
+   * What the end-of-turn watcher decided.
+   *
+   * Three outcomes, three different things to do, and none of them sends
+   * anything:
+   *
+   *   speech_ended  - the ordinary path. Transcribe and show the words.
+   *   max_duration  - the ceiling. Transcribe anyway: discarding a long
+   *                   answer because it was long is the rudest failure
+   *                   available, and the person can still edit or clear it.
+   *   no_speech     - a wake with nothing after it. Throw the audio away
+   *                   rather than submit an empty or nonsense transcript,
+   *                   and say so plainly so the wake does not look broken.
+   */
+  useEffect(() => {
+    onEndpointRef.current = (outcome) => {
+      if (outcome === "no_speech") {
+        cancelRecording(recoveryText("wake_heard_nothing"));
+        return;
+      }
+      if (outcome === "max_duration") {
+        setVoiceNote(recoveryText("listening_limit"));
+      }
+      void finishRecording();
+    };
+  }, [finishRecording, cancelRecording]);
+
+  /**
+   * The wake, as a turn.
+   *
+   * Wake detection PAUSES for the duration: two microphone streams at once
+   * is wasteful, and — worse — a recording that contains the word "Nora"
+   * would re-trigger the thing recording it.
+   *
+   * What it does NOT do is send anything. The transcript lands in the
+   * composer as editable text and the person presses Send, exactly as
+   * push-to-talk already works. A wake word may save a press; it may not
+   * turn a mishearing into an irreversible family action.
+   */
+  useEffect(() => {
+    onWakeRef.current = () => {
+      void (async () => {
+        // Belt and braces. The effect below should already have stood the
+        // detector down in every state but this one; a wake that arrives
+        // anyway - a frame already in flight when the state changed - is
+        // dropped rather than allowed to open a microphone over a draft.
+        if (!armedRef.current) return;
+        await noraRef.current?.pause();
+        appliedArmRef.current = false;
+        await beginRecording("wake");
+      })();
+    };
+  }, [beginRecording]);
+
+  /** The whole session is released when this component goes away. */
+  useEffect(() => {
+    return () => {
+      endpointerRef.current?.stop();
+      endpointerRef.current = null;
+      const session = noraRef.current;
+      noraRef.current = null;
+      void session?.stop();
+    };
+  }, []);
+
+  /**
+   * THE PAGE LEFT OPEN ACROSS THE CUTOFF.
+   *
+   * A timer, so the interface changes at the moment it should rather than at
+   * the next reload. It is presentation only — the authority is still the
+   * server, which is asked again before every re-arm — but a person watching
+   * a "Nora is listening" label tick past the end date would be watching a
+   * false statement, and the listener behind it would be real.
+   */
+  useEffect(() => {
+    if (!noraOn || noraStatus === null) return;
+    const delay = msUntilExpiry(noraStatus.availableUntil, new Date());
+    if (delay === null) return;
+    const timer = setTimeout(() => {
+      void teardownNora();
+      setNoraNote(noraMessage("expired"));
+    }, delay);
+    return () => clearTimeout(timer);
+  }, [noraOn, noraStatus, teardownNora]);
+
+  /**
+   * What the server says, on load. Fetched even when Nora is off, because it
+   * is what decides whether the control may be offered at all.
+   *
+   * A remembered ON is honoured only when the server agrees AND the browser
+   * already holds microphone permission. Restoring a preference must not
+   * make a permission prompt appear at somebody who has just opened a page.
+   */
+  useEffect(() => {
+    if (!noraPossible) return;
+    let cancelled = false;
+    void (async () => {
+      const status = await fetchNoraStatus();
+      if (cancelled) return;
+      setNoraStatus(status);
+      if (!status.available) return;
+
+      let remembered = false;
+      try {
+        remembered = window.localStorage.getItem("careloop.nora") === "on";
+      } catch {
+        remembered = false;
+      }
+      if (!remembered || !noraBrowserSupported()) return;
+
+      let alreadyGranted = false;
+      try {
+        const permission = await navigator.permissions?.query({
+          name: "microphone" as PermissionName,
+        });
+        alreadyGranted = permission?.state === "granted";
+      } catch {
+        alreadyGranted = false;
+      }
+      if (!cancelled && alreadyGranted) void enableNora();
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [enableNora, noraPossible]);
+
+  /* ---------------------------------------------------------------- */
+  /* Where Nora is, and therefore whether it may listen                */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * One derived value, from a pure function, tested exhaustively in
+   * `tests/unit/nora-state.test.ts`. Everything the interface says about
+   * Nora and everything the engine is told to do comes from here, so the two
+   * cannot disagree — which is what went wrong in the browser: the label
+   * said "listening" while a draft sat unresolved beneath it.
+   */
+  const composerHasText = input.trim().length > 0;
+  // An empty composer resolves the draft, whoever emptied it: Send, Clear,
+  // or the person selecting all and deleting. Idempotent, so running it on
+  // every render is exactly the same as running it once.
+  if (!composerHasText) draftFromVoiceRef.current = false;
+  const draftFromVoice = draftFromVoiceRef.current;
+
+  const nora = noraState({
+    configured: noraPossible,
+    available: noraStatus?.available ?? null,
+    enabled: noraOn,
+    starting: noraStarting,
+    recorder: voice,
+    wakeTurn,
+    composerHasText,
+    draftFromVoice,
+    sending: status === "sending",
+    // No barge-in here, so the wake detector stands down for the whole of
+    // playback and comes back through the same revalidating path as every
+    // other arm — not through a resume() bolted onto the audio's onended.
+    speaking,
+  });
+  const armed = wakeIsArmed(nora);
+  // A pure mirror of a derived value, for the wake callback to read without
+  // capturing a render.
+  armedRef.current = armed;
+
+  /**
+   * THE ENGINE IS MATCHED TO THE STATE, not driven by events.
+   *
+   * There is no "re-arm" call anywhere any more. This effect subscribes the
+   * wake detector when — and only when — the state machine says armed, and
+   * unsubscribes it otherwise. A draft appearing in the composer therefore
+   * stands the detector down as a matter of arithmetic rather than because
+   * some code path remembered to.
+   *
+   * AVAILABILITY IS REVALIDATED ON EVERY ARM. Not on the value fetched at
+   * load: a tab can sit through the cutoff, and the moment before a
+   * microphone reopens is exactly when the server should be asked again. A
+   * refusal tears the engine down rather than arming it.
+   */
+  useEffect(() => {
+    if (noraRef.current === null) {
+      appliedArmRef.current = null;
+      return;
+    }
+    if (appliedArmRef.current === armed) return;
+    appliedArmRef.current = armed;
+
+    let cancelled = false;
+    void (async () => {
+      const session = noraRef.current;
+      if (session === null) return;
+      if (!armed) {
+        await session.pause();
+        return;
+      }
+      const status = await fetchNoraStatus();
+      if (cancelled) return;
+      setNoraStatus(status);
+      if (!status.available) {
+        await teardownNoraRef.current();
+        setNoraNote(noraMessage(status.reason ?? "expired"));
+        return;
+      }
+      if (!cancelled) await noraRef.current?.resume();
+    })();
+
+    return () => {
+      cancelled = true;
+      // The decision never landed, so it must not count as applied.
+      if (appliedArmRef.current === armed) appliedArmRef.current = null;
+    };
+  }, [armed]);
 
   const busy = status === "sending";
   const greeting = props.displayName ? `Hello, ${props.displayName}` : null;
+
+  /**
+   * Nora's state, in a sentence. A message produced by a failure outranks
+   * the steady-state wording: the last thing that happened is what the
+   * person is trying to understand. Nothing here names a provider, a quota
+   * or an API — every one of these is a CareLoop product state.
+   */
+  /**
+   * THE ONE DOMINANT LINE.
+   *
+   * Large, plain, and at most one at a time. `noraStateText` below is the
+   * sentence that explains; this is the two or three words somebody can
+   * read from across the room. Null means nothing is happening, and then
+   * the panel is not rendered at all — an empty state announced loudly is
+   * still noise.
+   */
+  const voiceHeadline = noraStateHeadline(nora);
+
+  /** The opening survives only until the person says anything. */
+  const showOpening =
+    Boolean(props.openingLine) &&
+    !openingDismissed &&
+    !openingSeenRef.current &&
+    messages.length === 0 &&
+    !composerHasText;
+
+  const noraStateText =
+    noraNote ??
+    (nora === "unavailable"
+      ? noraMessage(noraStatus?.reason ?? "initialization_failed")
+      : (noraStateLabel(nora) ?? ""));
 
   return (
     <div className="mx-auto flex h-dvh w-full max-w-3xl flex-col px-4 sm:px-6">
@@ -327,6 +924,19 @@ export function Chat(props: {
           assertive, so a screen reader announces the reply when it settles
           instead of stuttering through every delta.
         */}
+        {/*
+          THE PROACTIVE OPENING. Decided on the server from an event the
+          person themselves reported; rendered here as something CareLoop
+          said, because it is. It disappears the moment they reply.
+        */}
+        {showOpening && (
+          <div className="flex justify-start pb-3">
+            <div className="max-w-[85%] rounded-2xl rounded-bl-md border border-[var(--color-line)] bg-[var(--color-surface)] px-4 py-3 text-[1rem] leading-normal">
+              {props.openingLine}
+            </div>
+          </div>
+        )}
+
         <div aria-live="polite" aria-atomic="false" className="space-y-3">
           {messages.map((message) => (
             <MessageRow
@@ -369,14 +979,46 @@ export function Chat(props: {
         The microphone's state in words, announced politely. Recording is a
         thing a person needs to be certain about, and a colour change is not
         enough to be certain of.
+
+        Sighted people now read this from the panel below; this stays for
+        the instruction the panel's headline has no room for.
       */}
       <p aria-live="polite" className="sr-only">
-        {voice === "recording"
-          ? "Recording. Press Stop when you have finished."
-          : voice === "transcribing"
-            ? "Working out what you said."
-            : ""}
+        {voice === "recording" ? "Press Stop when you have finished." : ""}
       </p>
+
+      {/*
+        THE VOICE STATE, once, and large.
+        A person who cannot tell whether CareLoop is listening will either
+        talk to a microphone that is off or assume one is on that is not.
+        Both are worse than a plain sentence, and the sentence is the same
+        value that decides whether the wake detector is armed — so the
+        interface cannot say "listening" while the engine is paused.
+      */}
+      {/*
+        `aria-live` without `role="status"`: the note above is already the
+        page's status region, and two of them means a screen reader
+        announces the same turn twice and `getByRole("status")` stops being
+        able to name either.
+      */}
+      {voiceHeadline !== null && (
+        <div aria-live="polite" className="shrink-0 pb-3">
+          <div
+            className={`rounded-2xl border px-4 py-3 ${
+              nora === "listening" || nora === "push_to_talk"
+                ? "border-[var(--color-accent)] bg-[var(--color-surface)]"
+                : "border-[var(--color-line)] bg-[var(--color-surface-muted)]"
+            }`}
+          >
+            <p className="text-[1.25rem] leading-snug font-semibold">{voiceHeadline}</p>
+            {noraStateText.length > 0 && !saysTheSame(noraStateText, voiceHeadline) && (
+              <p className="pt-1 text-[0.97rem] leading-relaxed text-[var(--color-muted)]">
+                {noraStateText}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
 
       <form
         className="shrink-0 pb-4"
@@ -433,7 +1075,7 @@ export function Chat(props: {
           <button
             type="button"
             onClick={() =>
-              voice === "recording" ? void finishRecording() : void beginRecording()
+              voice === "recording" ? void finishRecording() : void beginRecording("press")
             }
             disabled={busy || voice === "transcribing"}
             aria-label={voice === "recording" ? "Stop recording" : "Start voice input"}
@@ -468,6 +1110,106 @@ export function Chat(props: {
           </Button>
         </div>
 
+        {/*
+          NORA. One row, under the composer rather than inside it: the
+          microphone button is the interaction that always works, and an
+          experiment must not compete with it for the same space.
+
+          The control is offered only once the server has answered. It stays
+          pressable even when the answer was no, because "attempting to turn
+          it on tells you why" is a better experience than a dead switch
+          nobody can get an explanation out of.
+        */}
+        {/*
+          The voice controls row. Shown when there is a wake word to offer
+          OR when this person has used voice at all — a build with no wake
+          word still has a reading speed worth setting.
+        */}
+        {(noraStatus !== null || voiceModeOn) && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 pt-2.5">
+            {noraStatus !== null && (
+            <button
+              type="button"
+              onClick={toggleNora}
+              disabled={noraStarting}
+              role="switch"
+              aria-checked={noraOn}
+              aria-label="Nora hands-free"
+              className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-[0.95rem] transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                noraOn
+                  ? "border-[var(--color-accent)] bg-[var(--color-accent)] text-white"
+                  : "border-[var(--color-line)] text-[var(--color-muted)] hover:bg-[var(--color-surface-muted)]"
+              }`}
+            >
+              <span>Nora hands-free</span>
+              <span aria-hidden="true" className="font-semibold">
+                {noraStarting ? "…" : noraOn ? "On" : "Off"}
+              </span>
+            </button>
+            )}
+            {/*
+              The state itself now lives in the large panel above. This line
+              survives for the one case the panel does not cover: Nora is
+              simply off, so there is no state to announce — only an
+              invitation, or the reason a start failed.
+            */}
+            {/*
+              Reading speed. Offered only to somebody who has actually used
+              voice this session — a typed-chat user has nothing to set.
+              Two choices, not a slider: a slider is a decision to make.
+            */}
+            {voiceModeOn && (
+              <button
+                type="button"
+                aria-pressed={speechRate === "slower"}
+                aria-label="Read replies more slowly"
+                onClick={() => {
+                  const next: SpeechRate = speechRate === "slower" ? "normal" : "slower";
+                  speechRateRef.current = next;
+                  setSpeechRate(next);
+                  try {
+                    window.localStorage.setItem("careloop.speech-rate", next);
+                  } catch {
+                    /* a convenience, never load-bearing */
+                  }
+                }}
+                className={`rounded-xl border px-3 py-2 text-[0.95rem] transition-colors ${
+                  speechRate === "slower"
+                    ? "border-[var(--color-accent)] bg-[var(--color-accent)] text-white"
+                    : "border-[var(--color-line)] text-[var(--color-muted)] hover:bg-[var(--color-surface-muted)]"
+                }`}
+              >
+                {speechRate === "slower" ? "Reading slower" : "Read slower"}
+              </button>
+            )}
+
+            {voiceHeadline === null && noraStateText.length > 0 && (
+              <p className="text-[0.95rem] text-[var(--color-muted)]">{noraStateText}</p>
+            )}
+            {/*
+              Resolving a draft without sending it. Offered only for a
+              transcript Nora produced: text the person typed is theirs, and
+              a button that silently discards it would be worse than no
+              button. Clearing empties the composer, which is what re-arms
+              the wake detector — one action, one consequence.
+            */}
+            {nora === "draft_ready" && (
+              <button
+                type="button"
+                onClick={() => {
+                  setInput("");
+                  draftFromVoiceRef.current = false;
+                  setVoiceNote(null);
+                  composerRef.current?.focus();
+                }}
+                className="rounded-xl border border-[var(--color-line)] px-3 py-2 text-[0.95rem] text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-muted)]"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+        )}
+
         {(voice !== "off" || speaking) && (
           <div className="flex flex-wrap items-center gap-2.5 pt-2.5">
             {/* In words, never colour alone. */}
@@ -496,6 +1238,18 @@ export function Chat(props: {
       </form>
     </div>
   );
+}
+
+/**
+ * Whether the explaining sentence is just the headline again.
+ *
+ * Compared without trailing punctuation or case, because "Speaking" and
+ * "Speaking." are the same thing said twice and a person reading the panel
+ * should not have to notice the full stop to work that out.
+ */
+function saysTheSame(sentence: string, headline: string): boolean {
+  const strip = (value: string) => value.replace(/[.\s]+$/, "").trim().toLowerCase();
+  return strip(sentence) === strip(headline);
 }
 
 function MessageRow({

@@ -140,7 +140,12 @@ describe("2. sending a message", () => {
     fireEvent.click(screen.getByRole("button", { name: /send/i }));
 
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("couldn't send that just now");
+    // Sharpened in M12d: "couldn't send that just now" left it ambiguous
+    // whether the family message had gone. The application KNOWS it did
+    // not — nothing was persisted — so it says so, and says the words are
+    // still there to try again with.
+    expect(alert.textContent).toContain("hasn't been sent");
+    expect(alert.textContent).toContain("try again");
     // Nothing technical reaches the person.
     expect(alert.textContent).not.toMatch(/502|Error|fetch|stack/i);
   });

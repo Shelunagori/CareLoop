@@ -1,7 +1,7 @@
 import type { ClosureMarker } from "@/core/family/closure";
 import type { LlmMessage } from "@/server/adapters/openai/types";
 import type { StoredMessage } from "@/server/repositories/messages";
-import { conversationPromptV4 } from "@/server/prompts/conversation.v4";
+import { conversationPromptV6 } from "@/server/prompts/conversation.v6";
 
 /**
  * Deterministic context assembly (docs/01 §2.1 step 3). No LLM, no I/O — this
@@ -38,6 +38,21 @@ export type MemorySections = {
   profileCard: string | null;
   /** M2: entities mentioned this turn or active recently. */
   entityCards: readonly string[];
+  /**
+   * M12d: which of those the person named IN THIS MESSAGE.
+   *
+   * `selectEntities` has always computed this — it is how mentioned entities
+   * get sorted to the front — and then thrown it away, so the model received
+   * "John" and "Margaret" in one undifferentiated list and could not tell
+   * who had just been brought up from who was merely active last Tuesday.
+   *
+   * That is why "John called yesterday" got "That's nice to hear.": the card
+   * was there, the signal that it MATTERED right now was not.
+   *
+   * Names only, and only names already in the cards above. It adds no fact,
+   * it points at one.
+   */
+  mentionedNow: readonly string[];
   /** M2: top-k hybrid-scored episodes. */
   episodes: readonly string[];
   /**
@@ -58,6 +73,7 @@ export type MemorySections = {
 export const EMPTY_MEMORY: MemorySections = {
   profileCard: null,
   entityCards: [],
+  mentionedNow: [],
   episodes: [],
   pendingClosure: null,
   awaitingFamilyReply: null,
@@ -173,6 +189,25 @@ function renderMemory(memory: MemorySections): string {
     for (const card of memory.entityCards) blocks.push("", card);
   }
 
+  /**
+   * WHO THEY JUST NAMED. One line, and the only positive instruction in this
+   * block — everything else here is a boundary.
+   *
+   * It says who, not what to say about them: the follow-up is the model's to
+   * write and the card above is all it has to write from. Nothing is added
+   * that the cards do not already contain.
+   */
+  if (memory.mentionedNow.length > 0) {
+    blocks.push(
+      "",
+      `They have just mentioned ${memory.mentionedNow.join(" and ")} in this message.`,
+      "Respond to that as a friend would: acknowledge the person they named,",
+      "and if a question is natural, ask ONE about what they told you. Do not",
+      "list what you know about them, and do not mention anything above that",
+      "they did not bring up.",
+    );
+  }
+
   if (memory.episodes.length > 0) {
     blocks.push("", "Things they have told you about before:");
     blocks.push(...memory.episodes);
@@ -216,14 +251,14 @@ export function assembleContext(input: {
   // The base prompt is never mutated. Memory is appended as a second system
   // message so an empty-memory turn is byte-identical to M1.
   const system: LlmMessage[] = [
-    { role: "system", content: conversationPromptV4.system },
+    { role: "system", content: conversationPromptV6.system },
   ];
   if (hasMemory(memory)) {
     system.push({ role: "system", content: renderMemory(memory) });
   }
 
   return {
-    promptRef: conversationPromptV4.ref,
+    promptRef: conversationPromptV6.ref,
     messages: [...system, ...turns],
   };
 }

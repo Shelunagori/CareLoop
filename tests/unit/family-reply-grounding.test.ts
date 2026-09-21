@@ -11,7 +11,7 @@ import { buildConsentHooks } from "@/server/services/consent-hooks";
 import { drainEvents, fakeJobs, fakeLlm, fakeRepos, type CallLog } from "./fakes";
 import { sha256Hex } from "@/core/share/text-hash";
 import { createStore, resetIds } from "./detection-fakes";
-import { m5Deps, resetM5Ids, withM5, type M5Store } from "./consent-fakes";
+import { m5Deps, resetM5Ids, withM5, type M5Store , conversationUnderway} from "./consent-fakes";
 
 /**
  * P0: CARELOOP MUST NEVER INVENT A FAMILY REPLY.
@@ -95,7 +95,7 @@ async function deliveredAndUnanswered() {
   const store = seed();
   const deps = m5Deps({ store, clock: fixedClock(NOW) });
 
-  await prepareOffer(deps.consent, { userId: USER, recentMessages: [] });
+  await prepareOffer(deps.consent, { userId: USER, conversationId: "conv-1", recentMessages: conversationUnderway(NOW) });
   const approval = await handleConsentReply(deps.consent, {
     userId: USER,
     text: "yes please",
@@ -440,9 +440,9 @@ describe("the WIRING — a real turn actually carries the awaiting state", () =>
     expect(sent).toContain("has NOT replied");
   });
 
-  it("and the turn logs the v4 prompt that forbids inventing one", async () => {
+  it("and the turn logs the v6 prompt that forbids inventing one", async () => {
     const { request } = await turnAfterDelivery("Did John reply?");
-    expect(request!.promptRef).toBe("conversation.v4");
+    expect(request!.promptRef).toBe("conversation.v6");
   });
 
   it("nothing about the message itself reaches the model", async () => {

@@ -334,6 +334,10 @@ export function fakeMemoryRepos(store: MemoryStore) {
   };
 
   const interactionEvents: InteractionEventsRepo = {
+    async listRecentPositive() {
+      // Not a concern here: the proactive opening is tested on its own.
+      return [];
+    },
     async insertMany(events) {
       for (const event of events) {
         store.calls.push(`interactionEvents.insert:${event.eventType}:${event.polarity}`);

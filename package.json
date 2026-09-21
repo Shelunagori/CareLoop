@@ -19,9 +19,12 @@
     "reembed": "node --conditions=react-server --env-file-if-exists=.env.local --import tsx scripts/reembed.ts",
     "reembed:dry": "node --conditions=react-server --env-file-if-exists=.env.local --import tsx scripts/reembed.ts --dry-run",
     "reembed:status": "node --conditions=react-server --env-file-if-exists=.env.local --import tsx scripts/reembed.ts --status",
-    "cloudflare:smoke": "node --conditions=react-server --env-file-if-exists=.env.local --import tsx scripts/cloudflare-smoke.ts"
+    "cloudflare:smoke": "node --conditions=react-server --env-file-if-exists=.env.local --import tsx scripts/cloudflare-smoke.ts",
+    "test:evals": "vitest run tests/evals"
   },
   "dependencies": {
+    "@picovoice/porcupine-web": "^4.0.1",
+    "@picovoice/web-voice-processor": "^4.0.10",
     "@supabase/ssr": "^0.12.7",
     "@supabase/supabase-js": "^2.116.0",
     "next": "16.3.5",

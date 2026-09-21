@@ -5,6 +5,8 @@ import { conversationPromptV1 } from "@/server/prompts/conversation.v1";
 import { conversationPromptV2 } from "@/server/prompts/conversation.v2";
 import { conversationPromptV3 } from "@/server/prompts/conversation.v3";
 import { conversationPromptV4 } from "@/server/prompts/conversation.v4";
+import { conversationPromptV5 } from "@/server/prompts/conversation.v5";
+import { conversationPromptV6 } from "@/server/prompts/conversation.v6";
 import { assembleContext, EMPTY_MEMORY } from "@/server/services/context";
 
 /**
@@ -20,9 +22,12 @@ import { assembleContext, EMPTY_MEMORY } from "@/server/services/context";
  * pinned here by content hash - a comparison the test can make on its own,
  * with no git history to depend on.
  *
- * v4 is the live version. It exists because a live recording caught the
- * companion announcing a family reply that had never happened, and v3 could
- * not be edited to fix it.
+ * v5 is the live version. It exists because live browser testing caught two
+ * things v4 could not be edited to fix: a companion that answered "how are
+ * you?" with a disclaimer about not having feelings, and a companion that
+ * offered to send somebody a message of its own accord - which v4 already
+ * forbade, in one clause, which is why the real fix for that one is the
+ * deterministic guard rather than this file.
  */
 const hash = (file: string) =>
   createHash("sha256").update(readFileSync(file)).digest("hex");
@@ -40,6 +45,13 @@ const SEALED = {
     "2db98998c9b29dadd55360503dbed5e05b91ae25c34d4b6ca75583494c10c7f4",
   "server/prompts/conversation.v3.ts":
     "f0b73d3c12796134af63c42320f47befbf3f4c654f1227b49ce20abb5368a22e",
+  // Sealed by M12c, when v5 took over. v4 is the version every
+  // `conversation.v4` log line from M8-M12b points at.
+  // Sealed by M12d, when v6 took over.
+  "server/prompts/conversation.v5.ts":
+    "76044ebe4e69a4e8ce0193d79a59bfb09f504635fd06ec5bb8b91ecc8c916983",
+  "server/prompts/conversation.v4.ts":
+    "7fee3bbaf0d41b003fc8cee49602a0430a090466cc8fc06db6ed059308df88c4",
 } as const;
 
 /** Everything M8 acceptance added. None of it may appear in a sealed version. */
@@ -79,6 +91,8 @@ describe("1. the sealed versions are sealed", () => {
       conversationPromptV2,
       conversationPromptV3,
       conversationPromptV4,
+      conversationPromptV5,
+      conversationPromptV6,
     ]) {
       for (const leak of ["Nora", "wake", "hands-free", "hands free", "microphone"]) {
         expect(prompt.system, `${prompt.ref}: ${leak}`).not.toContain(leak);
@@ -207,27 +221,81 @@ describe("2. v3 is v2 plus the M8 rules, and nothing lost", () => {
   });
 });
 
-describe("3. v3 is the version that actually runs", () => {
-  it("the assembled context sends v4's bytes", () => {
+describe("3. v6 is the version that actually runs", () => {
+  it("the assembled context sends v6's bytes", () => {
     const context = assembleContext({ recentTurns: [], memory: EMPTY_MEMORY });
-    expect(context.messages[0].content).toBe(conversationPromptV4.system);
+    expect(context.messages[0].content).toBe(conversationPromptV6.system);
+    expect(context.messages[0].content).not.toBe(conversationPromptV5.system);
+    expect(context.messages[0].content).not.toBe(conversationPromptV4.system);
     expect(context.messages[0].content).not.toBe(conversationPromptV3.system);
     expect(context.messages[0].content).not.toBe(conversationPromptV2.system);
   });
 
-  it("and logs conversation.v4 as the ref", () => {
+  it("and logs conversation.v6 as the ref", () => {
     // `promptRef` is what reaches the provider log, so this IS the provenance
     // record for every new call.
     expect(assembleContext({ recentTurns: [], memory: EMPTY_MEMORY }).promptRef).toBe(
-      "conversation.v4",
+      "conversation.v6",
     );
   });
 
   it("nothing on the live path still imports a sealed version", () => {
     const source = readFileSync("server/services/context.ts", "utf8");
-    expect(source).toContain("conversation.v4");
+    expect(source).toContain("conversation.v6");
+    expect(source).not.toContain("conversation.v5");
+    expect(source).not.toContain("conversation.v4");
     expect(source).not.toContain("conversation.v3");
     expect(source).not.toContain("conversation.v2");
     expect(source).not.toContain("conversation.v1");
+  });
+
+  it("v5 inherits every rule v4 was written for", () => {
+    // A new version is a place to ADD a rule, never a chance to lose one.
+    for (const rule of [
+      "A family reply is never yours to announce",
+      "Feelings are theirs to state",
+      "the waiting is over",
+      "A recorded label is not a possessive",
+    ]) {
+      if (conversationPromptV4.system.includes(rule)) {
+        expect(conversationPromptV6.system, rule).toContain(rule);
+      }
+    }
+  });
+
+  it("and carries every rule each earlier version was written for", () => {
+    // A new version is a place to ADD a rule, never a chance to lose one.
+    for (const rule of [
+      "When they ask how you are",
+      "Offering to contact somebody is not yours to do",
+    ]) {
+      expect(conversationPromptV5.system, `v5: ${rule}`).toContain(rule);
+      expect(conversationPromptV6.system, `v6: ${rule}`).toContain(rule);
+      expect(conversationPromptV4.system, `v4: ${rule}`).not.toContain(rule);
+    }
+  });
+
+  it("v6 adds the memory-use rules, which v5 does not have", () => {
+    expect(conversationPromptV6.system).toContain("Using what you already know");
+    expect(conversationPromptV5.system).not.toContain("Using what you already know");
+  });
+
+  it("still refuses to claim feelings it does not have", () => {
+    // The tone change was about not RECITING the limitation, never about
+    // pretending the limitation is gone.
+    for (const rule of ["no feelings", "not a person", "do not say you slept well"]) {
+      expect(conversationPromptV6.system, rule).toContain(rule);
+    }
+  });
+
+  it("and every memory boundary survives the new permission to use memory", () => {
+    for (const rule of [
+      "not yet confirmed",
+      "Never recite the notes back",
+      "Never restate a fact just to show you remembered it",
+      "say so and ask",
+    ]) {
+      expect(conversationPromptV6.system, rule).toContain(rule);
+    }
   });
 });

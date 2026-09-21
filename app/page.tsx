@@ -17,7 +17,8 @@ import {
 import { getCurrentIdentity } from "@/server/auth/current-user";
 import { isDebugSurfaceEnabled, isDemoModeEnabled } from "@/server/config";
 import { loadConversationView } from "@/server/services/conversation";
-import { createConversationDataDeps } from "@/server/services/deps";
+import { loadOpeningLine } from "@/server/services/opening";
+import { createOpeningDeps, createConversationDataDeps } from "@/server/services/deps";
 
 export const dynamic = "force-dynamic";
 
@@ -60,6 +61,19 @@ export default async function Page() {
 
   const view = await loadConversationView(createConversationDataDeps(), userId);
 
+  /**
+   * ONE BOUNDED PROACTIVE OPENING (M12d).
+   *
+   * Decided here, on the server, from stored events the person themselves
+   * reported. `null` whenever there is nothing genuinely useful to open
+   * with, which is most of the time and is the correct answer — a greeting
+   * manufactured to look proactive is worse than no greeting.
+   */
+  const openingLine = await loadOpeningLine(createOpeningDeps(), {
+    userId,
+    conversationId: view.conversationId,
+  });
+
   const initialMessages: ChatMessage[] = view.messages
     .filter((message) => message.role !== "system")
     .map((message) => ({
@@ -78,6 +92,7 @@ export default async function Page() {
 
   return (
     <Chat
+      openingLine={openingLine}
       initialConversationId={view.conversationId}
       initialMessages={initialMessages}
       initialPendingOffer={view.pendingOffer}

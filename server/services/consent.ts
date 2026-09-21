@@ -8,8 +8,17 @@ import type {
   OpportunitiesRepo,
   OpportunityRecord,
 } from "@/server/repositories/opportunities";
-import { buildOfferBlock, needsRepresenting, type TranscriptMessage } from "@/core/share/offer";
+import {
+  buildCadencePreamble,
+  buildOfferBlock,
+  needsRepresenting,
+  type TranscriptMessage,
+} from "@/core/share/offer";
+import { ReconnectProposalSchema, type ReconnectProposal } from "@/core/detection/proposal";
+import { detectionConfig, type DetectionConfig } from "@/core/detection/config";
+import { cadenceMayBePresented } from "@/core/detection/presentation";
 import { SharePayloadSchema, type SharePayload } from "@/core/share/payload";
+import { sanitizeLabel } from "@/core/share/minimize";
 import { readConsent, type ConsentReading } from "@/core/consent/decision";
 import { buildConsentScope, consentExpiresAt } from "@/core/consent/grant";
 import { checkApprovalPreconditions } from "@/core/consent/validation";
@@ -32,6 +41,8 @@ export type ConsentDeps = {
   opportunities: OpportunitiesRepo;
   consentGrants: ConsentGrantsRepo;
   entities: EntitiesRepo;
+  /** Overridable so a pacing threshold is testable by passing a number. */
+  detection?: DetectionConfig;
 };
 
 const ENTITY_SCAN_LIMIT = 400;
@@ -41,17 +52,55 @@ function logEvent(record: Record<string, unknown>): void {
   console.log(JSON.stringify(record));
 }
 
+/**
+ * The entity's name, IF it is fit to show a person.
+ *
+ * `sanitizeLabel` is not a new rule invented here — it is the same function
+ * the outbound path has always used to decide what may appear in a message
+ * to a family member (`core/share/minimize.ts`). It allows letters, marks,
+ * spaces, apostrophes, hyphens and dots, and refuses everything else.
+ *
+ * WHY IT IS NOW ALSO ON THE PRESENTATION PATH. A reviewer's browser rendered
+ * "RECONNECT WITH M4ABSENCE1789574558". Every layer had behaved correctly:
+ * a developer seeding script had created an entity under that name, the
+ * detector found a real signal for it, and the card printed the display name
+ * it was given. The outbound message was never at risk — minimization would
+ * have refused the label — but the CARD had no such rule, so the two halves
+ * of one product disagreed about what counts as a person's name.
+ *
+ * Returning null here suppresses the offer entirely rather than showing an
+ * identifier. That is the right way round: an opportunity nobody sees costs
+ * a nudge, and a technical string presented as somebody's name costs the
+ * reviewer's belief that this is a product.
+ *
+ * NOTHING HERE IS FIXTURE-SPECIFIC. No name, prefix or id is mentioned; the
+ * rule is a character class, and it would refuse "user_42" and
+ * "550e8400-e29b" for exactly the same reason.
+ */
 async function entityNameFor(
   deps: ConsentDeps,
   input: { userId: string; entityId: string },
 ): Promise<string | null> {
   const entities = await deps.entities.listForUser(input.userId, ENTITY_SCAN_LIMIT);
-  return entities.find((entity) => entity.id === input.entityId)?.displayName ?? null;
+  const stored = entities.find((entity) => entity.id === input.entityId)?.displayName ?? null;
+  return sanitizeLabel(stored);
 }
 
 function readPayload(value: unknown): SharePayload | null {
   const parsed = SharePayloadSchema.safeParse(value);
   return parsed.success ? parsed.data : null;
+}
+
+/**
+ * The stored proposal, or null when this deploy cannot read it.
+ *
+ * Null is a real answer, not an error: a row written by an older shape holds
+ * no cadence claim this code can stand behind. Everything downstream treats
+ * it as "no claim" rather than guessing one.
+ */
+function readProposal(value: unknown): ReconnectProposal | null {
+  const parsed = ReconnectProposalSchema.safeParse(value);
+  return parsed.success ? (parsed.data as ReconnectProposal) : null;
 }
 
 /* ------------------------------------------------------------------------ */
@@ -68,6 +117,14 @@ export type OfferResult =
       renderedText: string;
       /** What the application appends to the turn, verbatim. */
       block: string;
+      /**
+       * WHY this offer appeared, when the application worked it out on its
+       * own. Deterministic, built from the stored proposal, and NOT part of
+       * `block`: the block's bytes are what consent attaches to and what the
+       * browser strips to draw the card. Null when the person supplied the
+       * context themselves, or when the proposal cannot be read.
+       */
+      preamble: string | null;
     }
   | { outcome: "none" }
   | { outcome: "expired"; opportunityId: string };
@@ -88,16 +145,24 @@ export async function prepareOffer(
   deps: ConsentDeps,
   input: {
     userId: string;
+    /**
+     * The conversation this turn belongs to. Carried for log correlation
+     * and for the seam's shape; the pacing gate reads `recentMessages`,
+     * whose timestamps are what a SITTING is measured from.
+     */
+    conversationId: string;
     /** Recent transcript, used only to tell "already shown" from "not shown". */
     recentMessages: ReadonlyArray<TranscriptMessage>;
   },
 ): Promise<OfferResult> {
   const now = deps.clock.now();
+  const config = deps.detection ?? detectionConfig;
   const candidates = await deps.opportunities.listByStatusForUser(
     input.userId,
     ["offered", "drafted"],
     OPPORTUNITY_SCAN_LIMIT,
   );
+
 
   for (const opportunity of candidates) {
     if (Date.parse(opportunity.expiresAt) <= now.getTime()) {
@@ -117,9 +182,33 @@ export async function prepareOffer(
       userId: input.userId,
       entityId: opportunity.entityId,
     });
-    if (entityName === null) continue;
+    if (entityName === null) {
+      // Either the entity is gone, or its stored label is not something to
+      // put in front of a person. Both are "say nothing", and both are
+      // worth a log line: silence with no explanation is how a suppressed
+      // offer becomes a bug report nobody can reproduce.
+      logEvent({
+        event: "consent.offer_withheld",
+        opportunityId: opportunity.id,
+        entityId: opportunity.entityId,
+        reason: "unpresentable_entity_label",
+      });
+      continue;
+    }
+
+    /**
+     * The stored proposal decides two things, and the model neither of them:
+     * whether this offer is the application's own observation (cadence) or
+     * the person's own statement (absence), and — if the former — the exact
+     * sentence explaining it.
+     */
+    const proposal = readProposal(opportunity.proposal);
+    const preamble = proposal === null ? null : buildCadencePreamble(proposal);
+    const isCadenceOnly = proposal !== null && proposal.observation.kind === "no_mention_since";
 
     if (opportunity.status === "offered") {
+      // Re-presenting is recovery, not interruption: this person was already
+      // told, or should have been. The pacing gate does not apply to it.
       if (
         opportunity.offeredAt === null ||
         !needsRepresenting(input.recentMessages, {
@@ -136,7 +225,39 @@ export async function prepareOffer(
         entityName,
         renderedText: opportunity.renderedText,
         block: buildOfferBlock({ entityName, renderedText: opportunity.renderedText }),
+        preamble,
       };
+    }
+
+    /**
+     * PACING, not suppression, and BEFORE the transition.
+     *
+     * A cadence-only offer is the application raising a family matter the
+     * person did not bring up. Doing that on the second thing they have ever
+     * said made correct detection feel arbitrary. So it waits — and it waits
+     * without spending the opportunity: no `markOffered`, no `offered_at`, no
+     * 7-day cooldown started, nothing for the person to have declined. The
+     * row stays `drafted` and the next qualifying turn inside its existing
+     * window shows it.
+     *
+     * `continue` rather than `return`: pacing this candidate says nothing
+     * about the next one, and an explicit absence behind it is still the
+     * person's own words waiting to be answered.
+     */
+    if (isCadenceOnly) {
+      const verdict = cadenceMayBePresented(input.recentMessages, config);
+      if (!verdict.present) {
+        logEvent({
+          event: "consent.offer_paced",
+          opportunityId: opportunity.id,
+          reason: verdict.reason,
+          userTurns: verdict.userTurns,
+          userCharacters: verdict.userCharacters,
+          needTurns: verdict.needTurns,
+          needCharacters: verdict.needCharacters,
+        });
+        continue;
+      }
     }
 
     const offered = await deps.opportunities.markOffered({
@@ -159,6 +280,7 @@ export async function prepareOffer(
       entityName,
       renderedText: opportunity.renderedText,
       block: buildOfferBlock({ entityName, renderedText: opportunity.renderedText }),
+      preamble,
     };
   }
 

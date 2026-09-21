@@ -66,6 +66,19 @@ export type InteractionEventsRepo = {
   }): Promise<InteractionEventRecord[]>;
   /** Oldest recorded contact for this user, or null. Cold-start input. */
   earliestOccurredAt(userId: string): Promise<string | null>;
+  /**
+   * Positive events since a cutoff, newest first, across every entity.
+   *
+   * The one source allowed to power a proactive opening (core/opening).
+   * Filtered to `positive` in the QUERY rather than after it: an absence
+   * assertion must not be able to reach that code path even by accident,
+   * and a filter in SQL is harder to drop than a filter in a map.
+   */
+  listRecentPositive(input: {
+    userId: string;
+    sinceOccurredIso: string;
+    limit: number;
+  }): Promise<InteractionEventRecord[]>;
 };
 
 const SELECT =
@@ -154,6 +167,19 @@ export function interactionEventsRepo(db: Db): InteractionEventsRepo {
         .order("reported_at", { ascending: false })
         .limit(limit);
       if (error) throw new Error(`listRecentAbsences failed: ${error.message}`);
+      return (data ?? []).map(toRecord);
+    },
+
+    async listRecentPositive({ userId, sinceOccurredIso, limit }) {
+      const { data, error } = await db
+        .from("interaction_events")
+        .select(SELECT)
+        .eq("user_id", userId)
+        .eq("polarity", "positive")
+        .gte("occurred_at", sinceOccurredIso)
+        .order("occurred_at", { ascending: false })
+        .limit(limit);
+      if (error) throw new Error(`listRecentPositive failed: ${error.message}`);
       return (data ?? []).map(toRecord);
     },
 

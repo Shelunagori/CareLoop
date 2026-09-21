@@ -1,3 +1,6 @@
+import type { DetectorEventType } from "@/core/detection/types";
+import type { ReconnectProposal } from "@/core/detection/proposal";
+
 /**
  * The verbatim offer block (F1, docs/04 section 11.2a).
  *
@@ -74,4 +77,79 @@ export function needsRepresenting(
   );
   if (after.length === 0) return false;
   return !after.some((message) => message.content.includes(input.renderedText));
+}
+
+/* ------------------------------------------------------------------------ */
+/* WHY the offer appeared                                                    */
+/* ------------------------------------------------------------------------ */
+
+/**
+ * The cadence preamble (M12).
+ *
+ * A cadence-gap offer is the application noticing something on its own. Live
+ * observation: after "hello" and "good and u", CareLoop surfaced "I can send
+ * John this message...". The detector was correct - six visits, median 7
+ * days, MAD 0, threshold 11, last visit 13 days ago - and the person was told
+ * none of it. Correct proactivity that arrives without its reason reads as
+ * arbitrary.
+ *
+ * So the reason is stated, and it is stated HERE: from the stored proposal,
+ * by a total function, with no model anywhere in the path. The model never
+ * receives the proposal (E1) and so cannot invent how often somebody visits,
+ * how long it has been, or why the gap exists - the four claims that would be
+ * most convincing and least checkable.
+ *
+ * It is deliberately NOT part of `buildOfferBlock`. The block's bytes are the
+ * ones consent attaches to and the ones the browser strips to draw the card;
+ * a sentence folded into them would be invisible to the person and would
+ * change the string the transcript is searched for.
+ */
+
+/** Days -> how often, in words. Buckets, so the wording is stable and total. */
+export function cadencePhrase(medianGapDays: number): string {
+  if (medianGapDays < 2) return "most days";
+  if (medianGapDays < 4) return "every few days";
+  if (medianGapDays < 11) return "about once a week";
+  if (medianGapDays < 19) return "about every couple of weeks";
+  if (medianGapDays < 46) return "about once a month";
+  // Math.max keeps the plural branch honest: no input reaching it may render
+  // as "about every 1 months".
+  return `about every ${Math.max(2, Math.round(medianGapDays / 30))} months`;
+}
+
+/** "see"/"saw" for a visit, "hear from"/"heard from" for a call. */
+function contactVerb(eventType: DetectorEventType): { present: string; past: string } {
+  return eventType === "call"
+    ? { present: "hear from", past: "heard from" }
+    : { present: "see", past: "saw" };
+}
+
+function days(count: number): string {
+  return count === 1 ? "1 day" : `${count} days`;
+}
+
+/**
+ * The sentence shown above a cadence offer, or null when there should be none.
+ *
+ * Null for `user_stated_absence`: the person supplied that context themselves,
+ * in this conversation, and restating it back at them would be the system
+ * explaining the person to themselves. The two triggers stay separate.
+ */
+export function buildCadencePreamble(proposal: ReconnectProposal): string | null {
+  if (proposal.observation.kind !== "no_mention_since") return null;
+
+  const elapsed = proposal.observation.days;
+  const verb = contactVerb(proposal.eventType);
+  const median = proposal.pattern?.medianGapDays;
+
+  // A rhythm claim needs a usable rhythm. `pattern` is always present on a
+  // cadence signal today - the detector requires an ACTIVE baseline - so this
+  // is the row written by a deploy that did not, or a median that is not a
+  // number to divide by. Either way the elapsed time is still a fact, and it
+  // is stated alone rather than dressed up with an invented pattern.
+  if (median === undefined || !Number.isFinite(median) || median <= 0) {
+    return `It's been ${days(elapsed)} since you last ${verb.past} ${proposal.entityName}.`;
+  }
+
+  return `You usually ${verb.present} ${proposal.entityName} ${cadencePhrase(median)}, and it's been ${days(elapsed)}.`;
 }

@@ -8,7 +8,7 @@ import type { ConversationsRepo } from "@/server/repositories/conversations";
 import type { MessagesRepo, StoredMessage } from "@/server/repositories/messages";
 import { sha256Hex } from "@/core/share/text-hash";
 import { createStore, resetIds } from "./detection-fakes";
-import { m5Deps, resetM5Ids, withM5, type M5Store } from "./consent-fakes";
+import { m5Deps, resetM5Ids, withM5, type M5Store , conversationUnderway} from "./consent-fakes";
 
 /**
  * POST /api/voice/speak, exercised as a browser exercises it.
@@ -79,7 +79,7 @@ function transcript(): { conversations: ConversationsRepo; messages: MessagesRep
       },
     },
     messages: {
-      async insert() {
+        async insert() {
         throw new Error("not used");
       },
       async findById(id) {
@@ -159,7 +159,7 @@ beforeEach(async () => {
   const store = seed();
   // An offer actually on the table, so the `offer` source has something real.
   const d = m5Deps({ store, clock: fixedClock(NOW) });
-  const offer = await prepareOffer(d.consent, { userId: USER, recentMessages: [] });
+  const offer = await prepareOffer(d.consent, { userId: USER, conversationId: "conv-1", recentMessages: conversationUnderway(NOW) });
   if (offer.outcome !== "offered") throw new Error("expected an offer");
   opportunityId = offer.opportunityId;
   speakableDeps = { ...d.closure, ...transcript() };
@@ -249,7 +249,7 @@ describe("3. refusals are quiet and specific", () => {
   it("404 once the reconnect is no longer on screen", async () => {
     const store = seed();
     const d = m5Deps({ store, clock: fixedClock(NOW) });
-    const offer = await prepareOffer(d.consent, { userId: USER, recentMessages: [] });
+    const offer = await prepareOffer(d.consent, { userId: USER, conversationId: "conv-1", recentMessages: conversationUnderway(NOW) });
     if (offer.outcome !== "offered") throw new Error("expected an offer");
     await handleConsentReply(d.consent, {
       userId: USER,

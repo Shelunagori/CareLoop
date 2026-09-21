@@ -446,6 +446,36 @@ function recordResponse(store: M5Store, args: Record<string, string>) {
   return { outcome: "recorded", responseId: response.id, closureId: closure.id };
 }
 
+/**
+ * A conversation already underway — past the cadence presentation gate.
+ *
+ * Every M5 test predating that gate is about the exact-text chain, not about
+ * when an offer is allowed to interrupt, and none of them should have to
+ * restate thresholds they do not care about. They pass this; the pacing
+ * tests build their own transcripts deliberately.
+ *
+ * Deliberately a real transcript rather than a magic number: the gate reads
+ * timestamps and content, so a fake that could not satisfy it honestly would
+ * be a fake that hides the rule instead of exercising it.
+ */
+export function conversationUnderway(
+  endingAt: Date = new Date(),
+): Array<{ role: string; content: string; createdAt: string }> {
+  const lines: Array<[string, string]> = [
+    ["user", "Morning. I finally got out into the garden yesterday afternoon."],
+    ["assistant", "That sounds lovely. How was it out there?"],
+    ["user", "Warm enough for a cup of tea on the bench, which was a treat."],
+    ["assistant", "A good spot for one."],
+    ["user", "The roses have come back much better than I expected this year."],
+  ];
+  const step = 60_000;
+  return lines.map(([role, content], index) => ({
+    role,
+    content,
+    createdAt: new Date(endingAt.getTime() - (lines.length - 1 - index) * step).toISOString(),
+  }));
+}
+
 export function m5Deps(input: {
   store: M5Store;
   clock: Clock;

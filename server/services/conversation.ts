@@ -14,6 +14,11 @@ import type { OpportunitiesRepo } from "@/server/repositories/opportunities";
 import type { EntitiesRepo } from "@/server/repositories/entities";
 import type { ProfilesRepo } from "@/server/repositories/profiles";
 import { buildOfferBlock } from "@/core/share/offer";
+import {
+  mayStillBecomeOutreach,
+  offersOutreach,
+  OUTREACH_FALLBACK,
+} from "@/core/safety/outreach-guard";
 
 /**
  * Orchestration for one conversational turn. The route handler stays thin:
@@ -73,6 +78,7 @@ export type ConsentTurnHooks = {
   }): Promise<ConsentOutcome>;
   prepareOffer(input: {
     userId: string;
+    conversationId: string;
     recentMessages: ReadonlyArray<{ role: string; content: string; createdAt: string }>;
   }): Promise<OfferResult>;
   loadClosure(input: { userId: string }): Promise<PendingClosure | null>;
@@ -140,6 +146,14 @@ export type TurnEvent =
       renderedText: string;
       /** The verbatim block as it is persisted into the message text. */
       block: string;
+      /**
+       * WHY this offer appeared, when the application noticed it rather than
+       * the person raising it. Streamed as its own field, and NOT part of
+       * `block`: the browser strips the block to draw the card, so a reason
+       * folded into it would be removed along with the draft. Null for an
+       * explicit absence, where the person supplied the context themselves.
+       */
+      preamble: string | null;
     }
   /**
    * The last event of every turn: what the reconnect looks like NOW.
@@ -275,6 +289,7 @@ export async function handleTurn(
     awaiting = await deps.consent.loadAwaitingReply({ userId: input.userId });
     offer = await deps.consent.prepareOffer({
       userId: input.userId,
+      conversationId: conversation.id,
       recentMessages: recentTurns,
     });
   }
@@ -321,6 +336,9 @@ export async function handleTurn(
       closureId: null,
       closureFallback: null,
       offer: presenting,
+      // The only turn whose words the model wrote, and so the only one the
+      // outreach guard applies to.
+      authored: "model",
     }),
   };
 }
@@ -364,6 +382,7 @@ async function handleClosureTurn(
       // offered on the next turn rather than being marked offered by a turn
       // that never drew the card.
       offer: null,
+      authored: "application",
     }),
   };
 }
@@ -418,6 +437,7 @@ async function handleConsentTurn(
       closureId: null,
       closureFallback: null,
       offer: null,
+      authored: "application",
     }),
   };
 }
@@ -452,6 +472,19 @@ async function* persistOnSuccess(
     closureFallback: string | null;
     /** M5: the offer, appended verbatim after the model has finished. */
     offer: OfferResult & { outcome: "offered" | "represented" } | null;
+    /**
+     * WHO WROTE THESE WORDS.
+     *
+     * The outreach guard below exists to stop the MODEL putting an external
+     * action on the table. The application putting one there is the whole
+     * point of the application: "would you like me to send that message to
+     * <name>?" is the consent flow's own sentence, and censoring it would
+     * be the safety check eating the thing it was protecting.
+     *
+     * Caught by `chat-consent.test.ts` the first time this shipped without
+     * the distinction.
+     */
+    authored: "model" | "application";
   },
 ): AsyncGenerator<TurnEvent> {
   let full = "";
@@ -501,9 +534,83 @@ async function* persistOnSuccess(
     full += text;
     if (text.length > 0) yield { type: "delta", text };
   } else {
+    /**
+     * THE MODEL DOES NOT PUT AN EXTERNAL ACTION ON THE TABLE.
+     *
+     * Live acceptance caught "Would you like to send a message to someone,
+     * by the way?" in the middle of smalltalk, immediately above the
+     * application's own reconnect card — two authorities proposing the same
+     * action, one of which had decided nothing. The prompt has forbidden
+     * this since v4. It happened anyway, which is the third time in this
+     * codebase an instruction has turned out to be a probability.
+     *
+     * STREAMING IS PRESERVED. Buffering every sentence would have been the
+     * easy version and would have cost first-token latency on every
+     * ordinary turn, for a failure that is about authority rather than
+     * safety. Instead only a sentence that has BEGUN like an offer is held
+     * until it is complete and can be judged; everything else streams token
+     * by token exactly as before. "Would you…" waits one sentence. "That
+     * sounds lovely" does not wait at all.
+     *
+     * The application's own offer block is appended below and never passes
+     * through here — it is allowed to ask, because the application decided.
+     */
+    let pending = "";
+    let dropped = 0;
+    const guarded = turn.authored === "model";
+
+    /** Emits a completed sentence, or drops it and says which rule fired. */
+    const settle = function* (sentence: string): Generator<TurnEvent> {
+      if (sentence.length === 0) return;
+      if (guarded && offersOutreach(sentence)) {
+        dropped += 1;
+        // The COUNT, never the sentence. A suppressed line is still the
+        // person's conversation, and it is not log material.
+        console.log(
+          JSON.stringify({ event: "chat.outreach_suggestion_suppressed", chars: sentence.length }),
+        );
+        // Its trailing space would otherwise open the next sentence.
+        pending = pending.replace(/^\s+/, "");
+        return;
+      }
+      full += sentence;
+      yield { type: "delta", text: sentence };
+    };
+
     for await (const delta of deltas) {
-      full += delta;
-      yield { type: "delta", text: delta };
+      pending += delta;
+
+      // Complete sentences are judged as they close. The separator stays
+      // with `pending`, so relayed pieces concatenate back to the model's
+      // exact bytes whenever nothing was dropped.
+      for (;;) {
+        const boundary = /[.!?](?=\s)|\n/.exec(pending);
+        if (boundary === null) break;
+        const cut = boundary.index + boundary[0].length;
+        const sentence = pending.slice(0, cut);
+        pending = pending.slice(cut);
+        yield* settle(sentence);
+      }
+
+      // The tail is an unfinished sentence. Relay it immediately unless it
+      // has begun like an offer, in which case it waits to be judged.
+      // `trim()`: a tail of pure whitespace is the gap between two
+      // sentences, and relaying it early would leave a stray space behind
+      // when the sentence after it turns out to be one that gets dropped.
+      if (pending.trim().length > 0 && !(guarded && mayStillBecomeOutreach(pending))) {
+        full += pending;
+        yield { type: "delta", text: pending };
+        pending = "";
+      }
+    }
+    yield* settle(pending);
+
+    // Everything the model said was an offer to act. Rare, and it still
+    // must not be empty: an empty completion fails the turn, which would
+    // turn a tone problem into a broken reply.
+    if (dropped > 0 && full.trim().length === 0) {
+      full += OUTREACH_FALLBACK;
+      yield { type: "delta", text: OUTREACH_FALLBACK };
     }
   }
 
@@ -514,6 +621,13 @@ async function* persistOnSuccess(
     // seen it and cannot have paraphrased it. The BLOCK still goes into the
     // persisted message byte for byte; the event carries the same bytes in
     // fields so the browser can draw a card instead of a paragraph.
+    //
+    // The reason, when there is one, is persisted BETWEEN the model's words
+    // and the block. That ordering is what makes a reloaded transcript read
+    // identically to the live turn: the browser strips the block it is
+    // drawing as a card, and what remains is the reply plus the reason -
+    // exactly the string the live turn assembled from the event.
+    if (turn.offer.preamble !== null) full += `\n\n${turn.offer.preamble}`;
     full += `\n\n${turn.offer.block}`;
     yield {
       type: "offer",
@@ -521,6 +635,7 @@ async function* persistOnSuccess(
       entityName: turn.offer.entityName,
       renderedText: turn.offer.renderedText,
       block: turn.offer.block,
+      preamble: turn.offer.preamble,
     };
   }
 

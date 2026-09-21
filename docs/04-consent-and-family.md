@@ -99,6 +99,46 @@ consent bugs happen. One function, exhaustively tested, with the `switch` on a
 discriminated union so TypeScript fails the build if a state is added and not
 handled.
 
+## 11.2b Why the offer appeared (M12)
+
+A `cadence_gap` offer is the application noticing something on its own, so it
+now says so first:
+
+```
+You usually see John about once a week, and it's been 13 days.
+
+I can send John this message:
+
+Dad was wondering — are you & Simba able to visit soon?
+
+Would you like me to send it?
+```
+
+The first line is a **preamble**, built by `buildCadencePreamble` in
+`core/share/offer.ts` from the stored `ReconnectProposal` — `entityName`,
+`eventType`, `pattern.medianGapDays`, `observation.days` — by a total function
+with no model in the path. The model never receives the proposal (E1), so it
+cannot invent how often somebody visits, how long it has been, or why the gap
+exists: the four claims that would be most convincing and least checkable.
+
+`medianGapDays` reaches words through one bucket table (`most days` /
+`every few days` / `about once a week` / `about every couple of weeks` /
+`about once a month` / `about every N months`). Interpretation, but
+deterministic, total and reviewable in one place; the underlying number is
+unchanged.
+
+**The preamble is not part of the offer block.** The block's bytes are what
+consent attaches to and what the browser strips to draw the card, so a
+sentence folded into them would be invisible to the person *and* would change
+the string the transcript is searched for. It is persisted between the model's
+words and the block — `reply \n\n reason \n\n block` — which is what makes a
+reloaded transcript read identically to the live turn.
+
+**An explicit absence gets no preamble.** The person supplied that context in
+this conversation; restating it back at them would be the system explaining
+the person to themselves. The two triggers stay separate, here and in `03`
+§10.3a.
+
 ## 11.3 What is stored as evidence
 
 ```ts

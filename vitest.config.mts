@@ -51,7 +51,20 @@ export default defineConfig({
       },
       {
         plugins: [react()],
-        resolve: { alias: { "@": root } },
+        resolve: {
+          alias: { "@": root },
+          /**
+           * The Picovoice packages ship `module` and no `main`, which a
+           * browser bundler resolves and Vite's node resolution does not.
+           * jsdom is a browser, so it is told to resolve like one.
+           *
+           * Nothing in the suite ever RUNS the wake engine — the import in
+           * `app/_components/nora.ts` is dynamic and only reached when a
+           * person turns Nora on. This is purely so that transforming the
+           * component does not fail on an import it never takes.
+           */
+          mainFields: ["module", "browser", "main"],
+        },
         test: {
           name: "ui",
           environment: "jsdom",

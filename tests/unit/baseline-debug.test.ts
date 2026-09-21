@@ -76,6 +76,10 @@ function deps(options: {
     },
     clock: fixedClock(NOW),
     interactionEvents: {
+      async listRecentPositive() {
+        // Not a concern here: the proactive opening is tested on its own.
+        return [];
+      },
       async insertMany() {},
       async listForSeries({ userId, entityId, eventType }) {
         options.onList?.(userId);

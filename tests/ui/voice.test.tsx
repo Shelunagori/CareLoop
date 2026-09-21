@@ -394,7 +394,10 @@ describe("4. reading replies aloud", () => {
     await waitFor(() => expect(screen.getByText("Hello there.")).toBeTruthy());
     expect(chatBodies).toHaveLength(1);
     const note = await screen.findByRole("status");
-    expect(note.textContent).toContain("couldn't play that aloud");
+    // Reworded in M12d's recovery audit: a blocked playback now says what
+    // was blocked AND what to do, rather than only that something failed.
+    expect(note.textContent).toContain("sound was blocked");
+    expect(note.textContent).toContain("try again");
   });
 
   it("the reconnect card survives the turn that spoke it", async () => {
@@ -655,17 +658,27 @@ describe("8. the composer is one control, not three", () => {
     expect(voiceControls.map((b) => b.getAttribute("aria-label"))).toEqual(["Start voice input"]);
   });
 
-  it("none of the removed hands-free controls came back", () => {
+  it("none of the removed CONVERSATION-SESSION controls came back", () => {
+    /**
+     * Narrowed in M12, deliberately. M9 built a wake word AND a listening
+     * session that stayed open for a whole conversation; live acceptance
+     * killed both. M12 brings back only the wake word, as an optional,
+     * expiring convenience that opens one ordinary recording — so the
+     * controls that belonged to the SESSION are what must still be absent.
+     *
+     * The Nora toggle's own absence here is a real assertion too, not an
+     * omission: this suite runs with no Picovoice configuration, and an
+     * unconfigured CareLoop must be indistinguishable from the one that
+     * shipped before Nora existed. `tests/ui/nora-toggle.test.tsx` renders
+     * the configured case.
+     */
     stubMicrophone();
     render(<Chat initialConversationId="c" initialMessages={[]} />);
 
     for (const gone of [
       /start conversation/i,
       /end conversation/i,
-      /enable hands-free/i,
-      /disable hands-free/i,
-      /nora/i,
-      /wake/i,
+      /stop listening/i,
     ]) {
       expect(screen.queryByRole("button", { name: gone }), String(gone)).toBeNull();
     }

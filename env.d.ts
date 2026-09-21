@@ -41,6 +41,17 @@ declare namespace NodeJS {
     CLOUDFLARE_EMBEDDING_MODEL?: string;
     CARELOOP_TRANSCRIPTION_LANGUAGE?: string;
 
+    /**
+     * M12, Nora (the optional wake word). All three optional: without them
+     * the wake word is simply not offered, and push-to-talk is unaffected.
+     * The access key is NEXT_PUBLIC_ because Porcupine runs in the browser -
+     * public by architecture, never treated as a secret.
+     */
+    NEXT_PUBLIC_PICOVOICE_ACCESS_KEY?: string;
+    NEXT_PUBLIC_NORA_KEYWORD_PATH?: string;
+    /** ISO-8601, UTC. The one authoritative cutoff. */
+    NORA_AVAILABLE_UNTIL?: string;
+
     BREVO_API_KEY?: string;
     BREVO_SENDER_EMAIL?: string;
     BREVO_SENDER_NAME?: string;

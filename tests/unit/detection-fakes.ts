@@ -313,6 +313,10 @@ export function fakeReconnectDeps(input: {
     },
 
     interactionEvents: {
+      async listRecentPositive() {
+        // Not a concern here: the proactive opening is tested on its own.
+        return [];
+      },
       async insertMany() {},
       async listForSeries({ entityId, eventType, sinceIso }) {
         return store.interactionEvents.filter(

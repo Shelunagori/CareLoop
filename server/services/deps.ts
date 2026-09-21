@@ -1,4 +1,6 @@
 import "server-only";
+import type { Clock } from "@/server/adapters/clock";
+import type { OpeningDeps } from "./opening";
 import { systemClock } from "@/server/adapters/clock";
 import { demoFixtureRepo } from "@/server/repositories/demo-fixture";
 import { createCloudflareTranscription } from "@/server/adapters/cloudflare/transcription";
@@ -378,5 +380,41 @@ export function createConsentDebugDeps(): ConsentDebugDeps {
     familyResponses: familyResponsesRepo(db),
     closures: closuresRepo(db),
     entities: entitiesRepo(db),
+  };
+}
+
+/**
+ * Nora's status route reads a clock and three environment variables, and
+ * nothing else. Injected rather than imported so the cutoff boundary is
+ * exercised with a fake clock instead of by moving the machine's date.
+ */
+export function createNoraStatusDeps(): {
+  clock: Clock;
+  env: {
+    NORA_AVAILABLE_UNTIL?: string;
+    NEXT_PUBLIC_PICOVOICE_ACCESS_KEY?: string;
+    NEXT_PUBLIC_NORA_KEYWORD_PATH?: string;
+  };
+} {
+  return {
+    clock: systemClock,
+    env: {
+      NORA_AVAILABLE_UNTIL: process.env.NORA_AVAILABLE_UNTIL,
+      NEXT_PUBLIC_PICOVOICE_ACCESS_KEY: process.env.NEXT_PUBLIC_PICOVOICE_ACCESS_KEY,
+      NEXT_PUBLIC_NORA_KEYWORD_PATH: process.env.NEXT_PUBLIC_NORA_KEYWORD_PATH,
+    },
+  };
+}
+
+/** M12d: the one bounded proactive opening. Reads only; decides nothing. */
+export function createOpeningDeps(): OpeningDeps {
+  const db = createServiceRoleClient();
+  return {
+    clock: systemClock,
+    interactionEvents: interactionEventsRepo(db),
+    entities: entitiesRepo(db),
+    messages: messagesRepo(db),
+    opportunities: opportunitiesRepo(db),
+    familyRequests: familyRequestsRepo(db),
   };
 }

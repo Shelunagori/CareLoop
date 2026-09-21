@@ -73,7 +73,7 @@ beforeEach(() => {
 describe("1. the offer shows the stored bytes, exactly", () => {
   it("builds the frozen three-part block around the verbatim draft", async () => {
     const store = storeWith();
-    const result = await prepareOffer(deps(store).consent, { userId: USER, recentMessages: [] });
+    const result = await prepareOffer(deps(store).consent, { userId: USER, conversationId: "conv-1", recentMessages: [] });
 
     expect(result.outcome).toBe("offered");
     if (result.outcome !== "offered") return;
@@ -92,8 +92,8 @@ describe("1. the offer shows the stored bytes, exactly", () => {
     const store = storeWith();
     const d = deps(store).consent;
     const [a, b] = await Promise.all([
-      prepareOffer(d, { userId: USER, recentMessages: [] }),
-      prepareOffer(d, { userId: USER, recentMessages: [] }),
+      prepareOffer(d, { userId: USER, conversationId: "conv-1", recentMessages: [] }),
+      prepareOffer(d, { userId: USER, conversationId: "conv-1", recentMessages: [] }),
     ]);
     const outcomes = [a.outcome, b.outcome].sort();
     // The loser says nothing: nobody has finished presenting it yet, so a
@@ -106,6 +106,7 @@ describe("1. the offer shows the stored bytes, exactly", () => {
     const store = storeWith({ status: "offered", offeredAt: NOW.toISOString() });
     const result = await prepareOffer(deps(store).consent, {
       userId: USER,
+      conversationId: "conv-1",
       recentMessages: [
         {
           role: "assistant",
@@ -121,6 +122,7 @@ describe("1. the offer shows the stored bytes, exactly", () => {
     const store = storeWith({ status: "offered", offeredAt: NOW.toISOString() });
     const result = await prepareOffer(deps(store).consent, {
       userId: USER,
+      conversationId: "conv-1",
       recentMessages: [
         {
           role: "assistant",
@@ -138,7 +140,7 @@ describe("1. the offer shows the stored bytes, exactly", () => {
 
   it("expires rather than offering a stale draft", async () => {
     const store = storeWith({ expiresAt: NOW.toISOString() });
-    const result = await prepareOffer(deps(store).consent, { userId: USER, recentMessages: [] });
+    const result = await prepareOffer(deps(store).consent, { userId: USER, conversationId: "conv-1", recentMessages: [] });
     expect(result.outcome).toBe("none");
     expect(store.opportunities[0].status).toBe("expired");
   });
@@ -148,7 +150,7 @@ describe("2. the answer", () => {
   async function offerThenReply(text: string, clock: Clock = fixedClock(NOW)) {
     const store = storeWith();
     const d = deps(store, clock).consent;
-    await prepareOffer(d, { userId: USER, recentMessages: [] });
+    await prepareOffer(d, { userId: USER, conversationId: "conv-1", recentMessages: [] });
     const outcome = await handleConsentReply(d, {
       userId: USER,
       text,
@@ -210,7 +212,7 @@ describe("2. the answer", () => {
   it("refuses to approve a stale offer", async () => {
     const store = storeWith();
     const d = deps(store).consent;
-    await prepareOffer(d, { userId: USER, recentMessages: [] });
+    await prepareOffer(d, { userId: USER, conversationId: "conv-1", recentMessages: [] });
 
     const later = fixedClock(new Date(NOW.getTime() + 25 * HOUR));
     const outcome = await handleConsentReply(deps(store, later).consent, {
@@ -237,7 +239,7 @@ describe("3. a duplicated yes produces one grant, not two", () => {
   it("is idempotent under a race", async () => {
     const store = storeWith();
     const d = deps(store).consent;
-    await prepareOffer(d, { userId: USER, recentMessages: [] });
+    await prepareOffer(d, { userId: USER, conversationId: "conv-1", recentMessages: [] });
 
     const [a, b] = await Promise.all([
       handleConsentReply(d, { userId: USER, text: "yes", grantingMessageId: "m1" }),
@@ -254,7 +256,7 @@ describe("3. a duplicated yes produces one grant, not two", () => {
   it("a second yes after approval finds no offer to answer", async () => {
     const store = storeWith();
     const d = deps(store).consent;
-    await prepareOffer(d, { userId: USER, recentMessages: [] });
+    await prepareOffer(d, { userId: USER, conversationId: "conv-1", recentMessages: [] });
     await handleConsentReply(d, { userId: USER, text: "yes", grantingMessageId: "m1" });
 
     const again = await handleConsentReply(d, {

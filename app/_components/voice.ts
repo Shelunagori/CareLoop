@@ -64,6 +64,17 @@ export type RecordingOptions = {
    * then; this exists so the interface can stop claiming to be listening.
    */
   onLimitReached?: () => void;
+  /**
+   * Handed the live stream once, as the recording begins (M12).
+   *
+   * A way to OBSERVE this recording's audio - Nora's end-of-turn detector
+   * attaches an analyser to it - and never a way to start one or to keep
+   * one. The single ending below stops these tracks on every terminal path
+   * regardless of what an observer did with them, so an observer that forgets
+   * to let go cannot hold a microphone open. Its exceptions are swallowed for
+   * the same reason: a convenience must not be able to fail a recording.
+   */
+  onStream?: (stream: MediaStream) => void;
 };
 
 /**
@@ -121,6 +132,12 @@ export async function startRecording(options: RecordingOptions = {}): Promise<Re
   recorder.ondataavailable = (event) => {
     if (event.data.size > 0) chunks.push(event.data);
   };
+
+  try {
+    options.onStream?.(stream);
+  } catch {
+    // An observer is a convenience. A recording is not.
+  }
 
   /** Set the moment any ending begins, so the ceiling cannot fire into one. */
   let ending = false;

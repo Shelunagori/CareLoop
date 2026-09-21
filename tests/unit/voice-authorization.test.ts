@@ -20,7 +20,7 @@ import { sha256Hex } from "@/core/share/text-hash";
 import type { ConversationsRepo } from "@/server/repositories/conversations";
 import type { MessagesRepo, StoredMessage } from "@/server/repositories/messages";
 import { createStore, resetIds } from "./detection-fakes";
-import { m5Deps, resetM5Ids, withM5, type M5Store } from "./consent-fakes";
+import { m5Deps, resetM5Ids, withM5, type M5Store , conversationUnderway} from "./consent-fakes";
 
 /**
  * What text-to-speech is allowed to say (M8, architecture review).
@@ -161,7 +161,7 @@ const message = (
 
 async function offered(store: M5Store) {
   const d = m5Deps({ store, clock: fixedClock(NOW) });
-  const offer = await prepareOffer(d.consent, { userId: USER, recentMessages: [] });
+  const offer = await prepareOffer(d.consent, { userId: USER, conversationId: "conv-1", recentMessages: conversationUnderway(NOW) });
   if (offer.outcome !== "offered") throw new Error(`expected an offer, got ${offer.outcome}`);
   return offer;
 }

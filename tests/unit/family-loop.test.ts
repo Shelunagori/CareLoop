@@ -20,6 +20,7 @@ import {
   resetM5Ids,
   withM5,
   type M5Store,
+  conversationUnderway,
 } from "./consent-fakes";
 
 const NOW = new Date("2026-09-16T12:00:00.000Z");
@@ -74,7 +75,7 @@ function seed(): M5Store {
 
 async function approve(store: M5Store, clock: Clock = fixedClock(NOW)) {
   const d = m5Deps({ store, clock });
-  await prepareOffer(d.consent, { userId: USER, recentMessages: [] });
+  await prepareOffer(d.consent, { userId: USER, conversationId: "conv-1", recentMessages: conversationUnderway(NOW) });
   const outcome = await handleConsentReply(d.consent, {
     userId: USER, text: "yes please", grantingMessageId: "msg-1",
   });
@@ -92,7 +93,7 @@ describe("1. the exact-byte chain", () => {
     const store = seed();
     const d = m5Deps({ store, clock: fixedClock(NOW) });
 
-    const offer = await prepareOffer(d.consent, { userId: USER, recentMessages: [] });
+    const offer = await prepareOffer(d.consent, { userId: USER, conversationId: "conv-1", recentMessages: conversationUnderway(NOW) });
     if (offer.outcome !== "offered") throw new Error("expected an offer");
     await handleConsentReply(d.consent, {
       userId: USER, text: "yes", grantingMessageId: "msg-1",
@@ -313,7 +314,7 @@ describe("3. delivery failure is unfinished transport, never lost consent", () =
     expect(store.opportunities[0].status).toBe("consumed");
     expect(store.grants).toHaveLength(1);
     const offer = await prepareOffer(m5Deps({ store, clock: fixedClock(NOW) }).consent, {
-      userId: USER, recentMessages: [],
+      userId: USER, conversationId: "conv-1", recentMessages: conversationUnderway(NOW),
     });
     expect(offer.outcome).toBe("none");
   });

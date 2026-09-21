@@ -41,7 +41,7 @@ export async function loadMemoryForTurn(
     deps.facts.listForSubject(input.userId, null, memoryConfig.profileFactLimit),
   ]);
 
-  const selected = selectEntities(entityRows, input);
+  const { selected, mentionedIds } = selectEntities(entityRows, input);
   const byId = new Map(entityRows.map((row) => [row.id, row]));
 
   const entityCards = selected.map((row) =>
@@ -57,6 +57,12 @@ export async function loadMemoryForTurn(
   return {
     profileCard,
     entityCards,
+    // The signal `selectEntities` has always computed and always discarded.
+    // Only names that ALSO have a card above, so the model is never pointed
+    // at somebody it has not been told about.
+    mentionedNow: selected
+      .filter((row) => mentionedIds.has(row.id))
+      .map((row) => row.displayName),
     episodes,
     // M4/M5 seams — still deliberately unfilled.
     pendingClosure: null,
@@ -73,7 +79,7 @@ export async function loadMemoryForTurn(
 function selectEntities(
   rows: readonly EntityRecord[],
   input: { text: string; now: Date },
-): EntityRecord[] {
+): { selected: EntityRecord[]; mentionedIds: ReadonlySet<string> } {
   const normalizedText = normalizeName(input.text);
   const nameToId = new Map<string, string>();
   for (const row of rows) {
@@ -96,10 +102,11 @@ function selectEntities(
     .filter((row) => !mentioned.has(row.id) && row.lastMentionedAt && row.lastMentionedAt >= cutoff)
     .sort((a, b) => (b.lastMentionedAt ?? "").localeCompare(a.lastMentionedAt ?? ""));
 
-  return [...rows.filter((row) => mentioned.has(row.id)), ...recent].slice(
+  const selected = [...rows.filter((row) => mentioned.has(row.id)), ...recent].slice(
     0,
     memoryConfig.entityCardLimit,
   );
+  return { selected, mentionedIds: mentioned };
 }
 
 function buildCard(

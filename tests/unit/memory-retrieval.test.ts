@@ -168,3 +168,78 @@ describe("bounded memory retrieval", () => {
     expect(memory.draftedOpportunityMarker).toBeNull();
   });
 });
+
+/**
+ * The mentioned-this-turn signal (M12d).
+ *
+ * `selectEntities` has always computed which entities the person named in
+ * this message — it is how they get sorted to the front — and for four
+ * milestones it discarded that, handing the model one undifferentiated
+ * list. "John called yesterday" got "That's nice to hear."
+ *
+ * Asserted here and not only in the context renderer: a revert of this
+ * plumbing produced no reds at all the first time it was proved, which is
+ * exactly the coverage gap a revert proof exists to find.
+ */
+describe("mentionedNow", () => {
+  const recent = (days: number) =>
+    new Date(NOW.getTime() - days * 86_400_000).toISOString();
+
+  it("names the entity the person just mentioned", async () => {
+    const memory = await loadMemoryForTurn(
+      deps({ entities: [entity("e1", "Margaret")] }),
+      { userId: USER, text: "Margaret came round today", now: NOW },
+    );
+    expect(memory.mentionedNow).toEqual(["Margaret"]);
+  });
+
+  it("is empty when they named nobody", async () => {
+    const memory = await loadMemoryForTurn(
+      deps({ entities: [entity("e1", "Margaret")] }),
+      { userId: USER, text: "it was a lovely morning", now: NOW },
+    );
+    expect(memory.mentionedNow).toEqual([]);
+  });
+
+  it("does NOT include a merely recently-active entity", async () => {
+    // The distinction the whole signal exists for: a card is offered for
+    // somebody active last Tuesday, but nothing points at them.
+    const memory = await loadMemoryForTurn(
+      deps({
+        entities: [
+          entity("e1", "Margaret"),
+          entity("e2", "Alan", { lastMentionedAt: recent(1) }),
+        ],
+      }),
+      { userId: USER, text: "Margaret came round today", now: NOW },
+    );
+    expect(memory.entityCards.join("\n")).toContain("Alan");
+    expect(memory.mentionedNow).toEqual(["Margaret"]);
+  });
+
+  it("names both when both were mentioned", async () => {
+    const memory = await loadMemoryForTurn(
+      deps({ entities: [entity("e1", "Margaret"), entity("e2", "Alan")] }),
+      { userId: USER, text: "Alan and Margaret were both here", now: NOW },
+    );
+    expect([...memory.mentionedNow].sort()).toEqual(["Alan", "Margaret"]);
+  });
+
+  it("never names somebody with no card — a pointer, not a claim", async () => {
+    // Capped at `entityCardLimit`, so a mention beyond the cap has no card
+    // and must not be pointed at.
+    const many = Array.from({ length: memoryConfig.entityCardLimit + 3 }, (_, i) =>
+      entity(`e${i}`, `Person${i}`),
+    );
+    const text = many.map((e) => e.displayName).join(" and ");
+    const memory = await loadMemoryForTurn(deps({ entities: many }), {
+      userId: USER,
+      text,
+      now: NOW,
+    });
+    expect(memory.mentionedNow.length).toBe(memory.entityCards.length);
+    for (const name of memory.mentionedNow) {
+      expect(memory.entityCards.join("\n")).toContain(name);
+    }
+  });
+});

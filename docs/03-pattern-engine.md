@@ -222,6 +222,44 @@ failure mode that kills this product is nagging. The rules that prevent it need
 to be in one file, testable, and readable by a non-engineer. It also means
 "why didn't it say anything?" has an answer.
 
+## 10.3a Conversational pacing for cadence-only offers (M12)
+
+Suppression above decides whether an opportunity may *exist*. This decides
+whether now is the moment to *say it*, and it is a different question with a
+different clock: suppression counts days, this counts turns.
+
+Observed in production:
+
+```
+person:   "hello"
+CareLoop: (ordinary reply)
+person:   "good and u"
+CareLoop: "...I can send John this message..."
+```
+
+The detection was entirely correct — six visits, median 7 days, MAD 0,
+threshold 11, last visit 13 days ago. What was wrong is that the application
+chose the second thing the person had ever said to raise a family matter.
+Correct proactivity delivered at the wrong moment reads as arbitrary, and an
+older-adult product cannot afford to feel arbitrary.
+
+**The rule.** `detectionConfig.minUserTurnsBeforeCadenceOffer` (3). A
+`cadence_gap` opportunity is not offered until the person has taken that many
+turns in the conversation. Evaluated in `prepareOffer`, **before** the
+`drafted -> offered` transition, so a withheld offer is not spent: no
+`offered_at`, no 7-day cooldown started, nothing the person can be said to
+have declined. The row stays `drafted` and the next qualifying turn inside
+`opportunityOfferabilityHours` shows it.
+
+**`user_asserted_absence` is exempt**, for the same reason it is exempt from
+`newAccountCadenceQuietDays`: the person opened the subject themselves, and
+making them wait two more turns to be answered would be the system ignoring
+the clearest evidence it will ever get.
+
+The turn count is a `COUNT` on the conversation, not the length of the bounded
+recent-turns window. Deriving it from that window would make a rule about the
+conversation quietly mean "within the last 20 messages".
+
 ## 10.4 The safety guard (spec items 9 & 10)
 
 The detector produces a `ReconnectProposal` — structured, observable facts only:

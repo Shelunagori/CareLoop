@@ -27,6 +27,43 @@ export const detectionConfig: DetectionConfig = {
    */
   newAccountCadenceQuietDays: 14,
 
+  /**
+   * How many turns the PERSON must have taken IN THE CURRENT SITTING before
+   * a cadence-only offer may interrupt it.
+   *
+   * Observed in production: after "hello" and "good and u", CareLoop raised a
+   * family matter. The detection was right; the moment was not. Explicit
+   * absence is exempt — the person opened that subject themselves — so this
+   * gate applies to the inferred trigger only, exactly as
+   * `newAccountCadenceQuietDays` does.
+   *
+   * Counted per SITTING, not per conversation row: CareLoop reopens the
+   * latest conversation, so a row-lifetime count is satisfied permanently
+   * after somebody's first visit — which is exactly when it was observed
+   * failing. See core/detection/presentation.ts.
+   */
+  minUserTurnsBeforeCadenceOffer: 3,
+  /**
+   * ...and how much they must have actually said in it.
+   *
+   * Turns alone is a number chosen to beat one transcript. "hello / good and
+   * u / how are you doing? / I am doing good what about you?" is four turns
+   * and sixty-four characters: pleasantries are short AND few. A conversation
+   * that is genuinely underway passes both bars within two or three turns;
+   * one that is still exchanging greetings passes neither.
+   *
+   * Whitespace-normalised characters of the PERSON's messages only.
+   */
+  minUserCharactersBeforeCadenceOffer: 120,
+  /**
+   * What separates one sitting from the next.
+   *
+   * A conversation row is not a conversation. Somebody who chatted last
+   * night and opens CareLoop this morning is starting again, and the pacing
+   * above has to start again with them.
+   */
+  sittingGapMinutes: 30,
+
   /* --- suppression: global caps --- */
   maxOffersPerConversation: 1,
   maxOffersPerWeek: 3,
@@ -62,6 +99,9 @@ export type DetectionConfig = {
   readonly declineCountForQuietPeriod: number;
   readonly declineQuietPeriodDays: number;
   readonly newAccountCadenceQuietDays: number;
+  readonly minUserTurnsBeforeCadenceOffer: number;
+  readonly minUserCharactersBeforeCadenceOffer: number;
+  readonly sittingGapMinutes: number;
   readonly maxOffersPerConversation: number;
   readonly maxOffersPerWeek: number;
   readonly offerWeekDays: number;
