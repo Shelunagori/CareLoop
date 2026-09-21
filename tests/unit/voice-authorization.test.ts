@@ -53,6 +53,7 @@ function seed(): M5Store {
           displayName: "John",
           aliases: [SENTINEL],
           status: "active",
+          origin: "user" as const,
           lastMentionedAt: null,
         },
       ],

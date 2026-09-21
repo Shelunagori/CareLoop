@@ -449,17 +449,26 @@ describe("5. a family reply, shown as an update", () => {
 
 describe("6. development-only controls", () => {
   it("are rendered only when the server decided this is development", async () => {
-    const page = (await import("node:fs")).readFileSync("app/page.tsx", "utf8");
-    // The decision is made on the server, in the page, and passed down as a
-    // node. The client component has no say and no env check of its own.
-    expect(page).toContain("const isDev = isDebugSurfaceEnabled(process.env);");
-    expect(page).toMatch(/devTools=\{\s*isDev \?/);
-    expect(page).toContain("<DemoResetButton");
-    // The family-inbox link is gated by the same single decision.
-    expect(page).toContain("<FamilyInboxLink />");
-    expect(page).toMatch(/demoHint=\{isDev \? <DemoHint/);
+    const fs = await import("node:fs");
+    const page = fs.readFileSync("app/page.tsx", "utf8");
+    // M12e.3: the conversation surface renders NO developer control at all,
+    // in any environment. They live on `/dev`, behind the same
+    // four-condition gate `/dev/family-inbox` uses.
+    expect(page).not.toContain("DemoResetControl");
+    expect(page).not.toContain("FamilyInboxLink");
+    expect(page).not.toContain("DemoHint");
+    expect(page).not.toContain("demoHint");
+    // The one thing left in that slot is product UI: a demo visitor
+    // restarting their own demo, authorized by owning the session.
+    expect(page).toContain(
+      "devTools={canRestartDemo ? <DemoRestartButton action={resetDemoSessionAction} /> : null}",
+    );
 
-    const chat = (await import("node:fs")).readFileSync("app/_components/chat.tsx", "utf8");
+    const dev = fs.readFileSync("app/dev/page.tsx", "utf8");
+    expect(dev).toContain("<DemoResetControl");
+    expect(dev).toContain("<FamilyInboxLink />");
+
+    const chat = fs.readFileSync("app/_components/chat.tsx", "utf8");
     expect(chat).not.toContain("NODE_ENV");
     expect(chat).not.toContain("isDebugSurfaceEnabled");
   });
@@ -485,15 +494,15 @@ describe("6. development-only controls", () => {
     expect(screen.queryByText(/try saying/i)).toBeNull();
   });
 
-  it("the hint appears above an empty chat when development passes it", () => {
-    render(
-      <Chat
-        initialConversationId={null}
-        initialMessages={[]}
-        demoHint={<p>Try saying: something.</p>}
-      />,
-    );
-    expect(screen.getByText(/try saying/i)).toBeTruthy();
+  it("M12e.3: an empty chat carries no developer copy at all", () => {
+    // The "Try saying…" hint moved to `/dev` with the controls. An empty
+    // conversation is the first thing a reviewer sees and the easiest place
+    // for scaffolding to hide.
+    render(<Chat initialConversationId={null} initialMessages={[]} />);
+    expect(screen.queryByText(/try saying/i)).toBeNull();
+    expect(screen.queryByText(/development only/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: /reset demo/i })).toBeNull();
+    expect(screen.queryByRole("link", { name: /family inbox/i })).toBeNull();
   });
 });
 

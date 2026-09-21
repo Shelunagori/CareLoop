@@ -640,13 +640,31 @@ function Learnings() {
         "Verified closure turns stopped calling the model at all. The class of failure is closed rather than narrowed.",
     },
     {
-      title: "A wake-word experiment that did not earn its place",
+      title: "A wake word, removed and then earned back",
       observed:
-        "Live testing showed the interaction wasn’t reliable enough for a dependable product experience, so I removed it and kept push-to-talk.",
+        "A first wake-word attempt was not reliable enough for a dependable product experience, so it was removed and push-to-talk kept. A later attempt — “Hey Nora”, off by default, with a server-authoritative expiry date — behaved well enough in a real browser to stand.",
       issue:
-        "Keeping it behind a flag would have meant shipping a feature nobody could trust and maintaining it forever.",
+        "Keeping the first one behind a flag would have meant shipping a feature nobody could trust. Shipping the second without a bound would have meant a demo that quietly outlives the licence it runs on.",
       change:
-        "Four general correctness fixes the experiment surfaced were kept, so the round was not wasted.",
+        "Nora is opt-in, ends on a date the server decides rather than the browser, and leaves push-to-talk as the path that always works. Four general correctness fixes the first attempt surfaced were kept either way.",
+    },
+    {
+      title: "A family matter raised in the middle of small talk",
+      observed:
+        "“How are you doing?” / “It was good, what about you?” produced a reconnect card — and produced effectively the same card again later in the same conversation.",
+      issue:
+        "Detection and presentation had been separated, but only halfway. An explicit absence was exempted from the pacing rule because the person had opened the subject themselves — true on the turn they say it, and false for the fourteen days the detector keeps re-examining the stored statement. Separately, “has this card already been shown?” was asked of a twenty-message window, so the answer flipped back to “no” once it scrolled out.",
+      change:
+        "One gate now decides whether the CURRENT turn still supports THIS opportunity: the person named them, or the sitting that raised it is still running, or — for a statistical gap — the conversation is genuinely underway. A refusal costs nothing: the draft stays waiting, unspent, with no cooldown and no duplicate.",
+    },
+    {
+      title: "Asked about Don, answered about John",
+      observed:
+        "“Don sent me a message today” was answered with a question about John — somebody from memory who had not been mentioned.",
+      issue:
+        "Extraction runs after the reply, so a name’s first mention can never have a card. The model was handed cards about the people who were active last week and nothing about the person in front of it, and background with nothing to compete with reads as an agenda.",
+      change:
+        "The turn now says so explicitly when nobody in memory was named, and tells the model to answer what was actually said rather than substitute a name it knows. Don becomes an ordinary entity through the same extraction path as anyone else — with no relationship invented, because none was stated.",
     },
   ] as const;
 
@@ -655,7 +673,7 @@ function Learnings() {
       id="learnings"
       eyebrow="Engineering decisions"
       title="What live testing changed"
-      lead="Each of these came from running the thing for real, not from reading the code. The pattern is the same all three times: observe the failure, then move a boundary rather than add an instruction."
+      lead="Each of these came from running the thing for real, not from reading the code. The pattern is the same every time: observe the failure, then move a boundary rather than add an instruction."
     >
       <div className="flex flex-col gap-4">
         {cases.map((item, index) => (
@@ -708,6 +726,11 @@ function Boundaries() {
     "Raw voice audio is transient and never persisted",
     "Family receive only minimized, approved information",
     "Verified external-world state is application-owned",
+    "A wellbeing note repeats what the person said, never an assessment of them",
+    "No model writes the wellbeing message — it is a fixed sentence",
+    "Nobody receives it unless exactly one family contact is configured",
+    "Urgent language stands every proactive offer down",
+    "Development-seeded people are never named to a person",
   ];
 
   return (

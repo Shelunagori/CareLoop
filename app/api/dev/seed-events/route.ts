@@ -88,6 +88,16 @@ export async function POST(request: Request) {
       type: "person",
       subtype: null,
       displayName: entityName,
+      /**
+       * STAMPED, so the presentation path can refuse it (M12e).
+       *
+       * This route is where "M4ABSENCE1789574558" came from: an operator
+       * types a name, and until now the row it created was indistinguishable
+       * from a person the user had told CareLoop about. A label filter caught
+       * that particular string because it had digits in it; it could never
+       * have caught "TestPersonA". The row now says what it is.
+       */
+      origin: "dev",
     }));
 
   const spec: Preset = PRESETS[preset];

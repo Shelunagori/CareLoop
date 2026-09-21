@@ -99,6 +99,11 @@ export function safeClosureContinuation(fact: Pick<ClosureFact, "topic" | "respo
   // "no", "unsure" and "other" all mean nothing was agreed to, so nothing
   // about a visit or a call may be wished well.
   if (fact.responseIntent !== "yes") return "You're welcome.";
+  // M12e: a wellbeing closure gets the plainest of the three. "I hope you
+  // feel better" would be the system deciding how the person is, which is
+  // the one thing this whole path refuses to do — the family member agreed
+  // to check in, and that is all that was verified.
+  if (fact.topic === "wellbeing") return "You're welcome. I'm glad they'll be in touch.";
   return fact.topic === "call"
     ? "You're welcome. I hope the call goes well."
     : "You're welcome. I hope the visit goes well.";

@@ -51,7 +51,12 @@ export function closureMarker(fact: ClosureFact): ClosureMarker {
  */
 export function renderClosureSentence(fact: ClosureFact): string {
   const when = fact.timeframe ? ` ${fact.timeframe}` : " soon";
-  const action = fact.topic === "call" ? "call" : "visit";
+  // The stored answer is a bare polarity; the TOPIC supplies the verb (M12e
+  // adds the third). A wellbeing reply is a promise to check in — never a
+  // statement about the person's health, which the reader was never asked
+  // about and has no way to send.
+  const action =
+    fact.topic === "call" ? "call" : fact.topic === "wellbeing" ? "check in" : "visit";
 
   // The stored answer is a bare polarity; the TOPIC supplies the verb. That is
   // why "yes" to a call renders as a call and never as a visit.

@@ -49,6 +49,21 @@ export type FamilyReplyChoice = {
  * verb when the closure is rendered.
  */
 export function replyChoicesFor(topic: ShareTopic): FamilyReplyChoice[] {
+  /**
+   * M12e. The choices a family member is given about a wellbeing note are
+   * about WHAT THEY WILL DO, never about the older adult's health. There is
+   * deliberately no "how bad is it?", no "are they alright?" and no free
+   * text: the reader cannot report a symptom back into CareLoop, so nothing
+   * clinical can enter by this door either.
+   */
+  if (topic === "wellbeing") {
+    return [
+      { id: "yes_today", label: "Yes, I'll check in today.", intent: "yes", timeframe: "today" },
+      { id: "yes_soon", label: "Yes, I'll check in soon.", intent: "yes", timeframe: "soon" },
+      { id: "unsure", label: "Not sure yet.", intent: "unsure" },
+      { id: "no", label: "Not just now.", intent: "no" },
+    ];
+  }
   if (topic === "call") {
     return [
       { id: "yes_soon", label: "Yes, I'll give them a call soon.", intent: "yes", timeframe: "soon" },

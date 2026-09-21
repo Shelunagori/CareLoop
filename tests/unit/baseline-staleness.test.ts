@@ -43,7 +43,10 @@ function harness(options: {
   const deps: BaselineDeps = {
     clock: fixedClock(now),
     interactionEvents: {
-      async listRecentPositive() {
+      async latestPositiveSince() {
+      return null;
+    },
+    async listRecentPositive() {
         // Not a concern here: the proactive opening is tested on its own.
         return [];
       },

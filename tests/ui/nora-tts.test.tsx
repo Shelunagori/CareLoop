@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
@@ -114,6 +114,39 @@ function stubBrowser() {
   }));
 }
 
+
+/**
+ * Let every pending microtask and timer callback run.
+ *
+ * Needed because arming is ASYNCHRONOUS while the sentence that announces
+ * it is not: `armed` is derived in render, so "Nora is listening" paints on
+ * the tick the audio ends, and the effect that actually subscribes the
+ * detector is still two awaits behind it (revalidate, then resume).
+ *
+ * That gap is why "natural completion re-arms, exactly once" failed on one
+ * machine and passed on another. It was never an implementation defect: the
+ * test asserted a consequence of an async effect the instant a synchronous
+ * render appeared, and how many ticks `waitFor` had burned by then is a
+ * property of the scheduler, not of CareLoop. Adding one `setTimeout(0)` to
+ * the mocked status fetch reproduces the reported `expected +0 to be 1`
+ * exactly.
+ *
+ * So the invariant is WAITED FOR and then held: armed exactly once, and
+ * still exactly once after everything else has run.
+ */
+async function settle(): Promise<void> {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+/** The detector became armed exactly once — and stays that way. */
+async function armedExactlyOnce(before: number): Promise<void> {
+  await waitFor(() => expect(engine.resumes).toBe(before + 1));
+  await settle();
+  expect(engine.resumes).toBe(before + 1);
+}
+
 /** Wake, dictate, and send — the state in which playback begins. */
 async function speakAReply() {
   render(<Chat initialConversationId="conv-1" initialMessages={[]} />);
@@ -176,7 +209,21 @@ describe("2. when the audio finishes", () => {
     audio.end();
 
     await waitFor(() => expect(screen.getByText(/listening for .Hey Nora./i)).toBeTruthy());
-    expect(engine.resumes).toBe(before + 1);
+    await armedExactlyOnce(before);
+  });
+
+  it("and the engine really is armed — a wake is accepted", async () => {
+    // The state machine saying "armed" and the detector BEING armed are two
+    // different claims, and only this one is about Porcupine. Without it a
+    // regression that left the engine paused while the headline said
+    // otherwise would pass every other test in this file.
+    await speakAReply();
+    const before = engine.resumes;
+    audio.end();
+    await armedExactlyOnce(before);
+
+    engine.onWake();
+    expect(await screen.findByRole("button", { name: /stop recording/i })).toBeTruthy();
   });
 
   it("pressing Stop reading re-arms too", async () => {
@@ -187,7 +234,7 @@ describe("2. when the audio finishes", () => {
     fireEvent.click(stopReading);
 
     await waitFor(() => expect(screen.getByText(/listening for .Hey Nora./i)).toBeTruthy());
-    expect(engine.resumes).toBe(before + 1);
+    await armedExactlyOnce(before);
   });
 
   it("re-arming revalidates against the server, like every other arm", async () => {

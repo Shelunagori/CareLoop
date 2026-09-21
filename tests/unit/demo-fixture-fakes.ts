@@ -140,6 +140,7 @@ export function fakeDemoRepo(store: MemoryStore, profiles: Map<string, StoredPro
         displayName: input.displayName,
         aliases: [...input.aliases],
         status: "active",
+        origin: "user" as const,
         lastMentionedAt: null,
       });
     },

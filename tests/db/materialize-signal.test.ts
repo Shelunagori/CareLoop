@@ -76,6 +76,8 @@ describe("0. the migrations apply, in order, on a clean database", () => {
       "20260916130000_m2_ingestion_support.sql",
       "20260916140000_m4_materialize_signal.sql",
       "20260916150000_m5_consent_and_family.sql",
+      "20260921120000_m12e_entity_provenance.sql",
+      "20260921120100_m12e_wellbeing_signal.sql",
     ]);
   });
 });

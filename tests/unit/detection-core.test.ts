@@ -300,6 +300,9 @@ describe("5. the absence detector works with any baseline, or none", () => {
         start: new Date(NOW.getTime() - 7 * DAY_MS).toISOString(),
         end: NOW.toISOString(),
       },
+      // M12e.1: WHEN they said it, alongside what they said it about. The
+      // presentation gate is tied to this, not to the window.
+      statedAt: NOW.toISOString(),
     });
     expect(proposal.observation).not.toHaveProperty("statedPhrase");
     expect(JSON.stringify(proposal)).not.toContain("quotedWindow");

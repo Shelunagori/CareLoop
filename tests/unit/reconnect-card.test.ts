@@ -36,6 +36,7 @@ function store(status: "drafted" | "offered" = "drafted"): M5Store {
           displayName: "John",
           aliases: [],
           status: "active",
+          origin: "user" as const,
           lastMentionedAt: null,
         },
       ],

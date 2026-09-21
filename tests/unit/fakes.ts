@@ -81,7 +81,7 @@ export function fakeRepos(options: {
       },
     },
     entities: {
-      async listForUser() {
+      async listPresentableForUser() {
         return [];
       },
     },

@@ -318,3 +318,76 @@ describe("7. a browser without Web Audio degrades, it does not break", () => {
     await waitFor(() => expect(composer().value).toBe("good morning"));
   });
 });
+
+/**
+ * 14. WHERE THE WORDS CAME FROM (M12e).
+ *
+ * The pipeline was already right; it was only invisible. On a recording the
+ * transcript appears in the same box a typed message appears in, so a
+ * reviewer cannot tell whether anybody spoke. One line fixes that, and
+ * these tests pin what it must NOT do as hard as what it must.
+ */
+describe("14. the voice-origin indicator", () => {
+  const originLabel = () => screen.queryByText(/voice transcript/i);
+
+  it("appears for a transcript the microphone produced", async () => {
+    await wake();
+    watcher.decide("speech_ended");
+    await waitFor(() => expect(composer().value).toBe("good morning"));
+    expect(originLabel()).toBeTruthy();
+  });
+
+  it("appears for a PRESSED recording too — origin, not wake word", async () => {
+    render(<Chat initialConversationId="c" initialMessages={[]} />);
+    await waitFor(() => expect(toggle()).toBeTruthy());
+    stubMicrophone();
+    fireEvent.click(screen.getByRole("button", { name: /start voice input/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /stop recording/i }));
+    await waitFor(() => expect(composer().value).toBe("good morning"));
+    expect(originLabel()).toBeTruthy();
+  });
+
+  it("never appears for a typed message", async () => {
+    render(<Chat initialConversationId="c" initialMessages={[]} />);
+    await waitFor(() => expect(toggle()).toBeTruthy());
+    fireEvent.change(composer(), { target: { value: "I typed this myself." } });
+    expect(originLabel()).toBeNull();
+  });
+
+  it("survives editing — correcting a misheard word is still speech", async () => {
+    await wake();
+    watcher.decide("speech_ended");
+    await waitFor(() => expect(composer().value).toBe("good morning"));
+    fireEvent.change(composer(), { target: { value: "good morning John" } });
+    expect(originLabel()).toBeTruthy();
+  });
+
+  it("goes when the composer is emptied, whoever emptied it", async () => {
+    await wake();
+    watcher.decide("speech_ended");
+    await waitFor(() => expect(composer().value).toBe("good morning"));
+    fireEvent.change(composer(), { target: { value: "" } });
+    await waitFor(() => expect(originLabel()).toBeNull());
+  });
+
+  it("does not imply auto-send: Send is still the only way out", async () => {
+    await wake();
+    watcher.decide("speech_ended");
+    await waitFor(() => expect(composer().value).toBe("good morning"));
+
+    const label = originLabel()!;
+    expect(label.textContent?.toLowerCase()).toContain("send");
+    expect(label.textContent?.toLowerCase()).not.toMatch(/sending|will send|sent/);
+    expect(screen.getByRole("button", { name: /^send$/i })).toBeTruthy();
+    // Nothing has been posted.
+    const calls = (globalThis.fetch as unknown as { mock: { calls: string[][] } }).mock.calls;
+    expect(calls.some((c) => c[0] === "/api/chat")).toBe(false);
+  });
+
+  it("adds no second composer", async () => {
+    await wake();
+    watcher.decide("speech_ended");
+    await waitFor(() => expect(composer().value).toBe("good morning"));
+    expect(screen.getAllByRole("textbox")).toHaveLength(1);
+  });
+});

@@ -220,13 +220,16 @@ describe("5. what the inbox shows, and what it refuses to show", () => {
 });
 
 describe("6. George's product contains no door into John's inbox", () => {
-  it("the page renders the operator control only in development", () => {
-    const home = code("app/page.tsx");
-    // One server-side decision, used for every dev affordance. Production
-    // renders none of them, so none of them reach the bundle.
-    expect(home).toContain("isDebugSurfaceEnabled(process.env)");
-    expect(home).toMatch(/devTools=\{\s*isDev \?/);
-    expect(home).toContain("<FamilyInboxLink />");
+  it("the operator control renders only on the operator surface", () => {
+    // M12e.3: one server-side decision, on `/dev`, made of the same four
+    // conditions as this viewer itself. The conversation page has no dev
+    // affordance in any environment, so none of them reach any bundle.
+    const operator = code("app/dev/page.tsx");
+    expect(operator).toContain("isDebugSurfaceEnabled(process.env)");
+    expect(operator).toContain("authorizeDevSeed(process.env");
+    expect(operator).toContain("isLocalOperatorHost");
+    expect(operator).toContain("<FamilyInboxLink />");
+    expect(code("app/page.tsx")).not.toContain("FamilyInboxLink");
   });
 
   it("the link lives with the operator controls, not in the conversation", () => {
@@ -235,13 +238,14 @@ describe("6. George's product contains no door into John's inbox", () => {
     const chat = source("app/_components/chat.tsx");
 
     expect(link).toContain('href="/dev/family-inbox"');
-    // Rendered beside the reset control, in the dev-only slot, never inside
-    // the conversation itself.
-    expect(home).toMatch(/isDev \? \([\s\S]*<FamilyInboxLink \/>[\s\S]*<DemoResetButton/);
+    // M12e.3: rendered on the operator surface, never in the conversation.
+    const dev = code("app/dev/page.tsx");
+    expect(dev).toMatch(/<FamilyInboxLink \/>/);
+    expect(home).not.toContain("FamilyInboxLink");
     // The chat itself knows nothing about it. George is not being shown a way
     // into his family's messages; the demo operator is.
     expect(chat).not.toContain("family-inbox");
-    expect(chat).not.toContain("Open family inbox");
+    expect(chat).not.toContain("Family inbox (dev)");
   });
 
   it("the link is a server component, so production never bundles it", () => {
@@ -252,7 +256,7 @@ describe("6. George's product contains no door into John's inbox", () => {
     // The comment explains why there is no directive; only executable text
     // decides whether there is one.
     expect(code("app/_components/dev-operator.tsx")).not.toContain('"use client"');
-    expect(code("app/_components/dev-hint.tsx")).not.toContain('"use client"');
+    expect(code("app/dev/page.tsx")).not.toContain('"use client"');
     expect(source("app/_components/dev-tools.tsx")).not.toContain("family-inbox");
   });
 
@@ -269,7 +273,7 @@ describe("6. George's product contains no door into John's inbox", () => {
         if (statSync(full).isDirectory()) walk(full);
         else if (entry.endsWith(".js")) {
           const text = readFileSync(full, "utf8");
-          for (const needle of ["family-inbox", "Open family inbox", "No family messages"]) {
+          for (const needle of ["family-inbox", "Family inbox (dev)", "No family messages"]) {
             if (text.includes(needle)) offenders.push(`${full}: ${needle}`);
           }
         }

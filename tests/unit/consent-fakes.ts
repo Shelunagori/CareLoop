@@ -93,6 +93,9 @@ export function fakeConsentGrants(store: M5Store): ConsentGrantsRepo {
 
 export function fakeFamilyContacts(store: M5Store): FamilyContactsRepo {
   return {
+    async listForUser(userId, limit) {
+      return store.contacts.filter((c) => c.userId === userId).slice(0, limit);
+    },
     async findForEntity(userId, entityId) {
       return store.contacts.find((c) => c.userId === userId && c.entityId === entityId) ?? null;
     },
@@ -500,6 +503,7 @@ export function m5Deps(input: {
       opportunities: base.opportunities,
       consentGrants: fakeConsentGrants(store),
       entities: base.entities,
+      interactionEvents: base.interactionEvents,
     },
     send: {
       clock,

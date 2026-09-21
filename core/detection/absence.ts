@@ -40,6 +40,54 @@ export type AbsenceEventInput = {
   statedPhrase?: string | null;
 };
 
+/**
+ * Has newer evidence overtaken this absence? (M12e.1)
+ *
+ * "I haven't seen Don recently" is a report about a window. It stops being
+ * a thing to raise the moment the person tells us the opposite — "Don sent
+ * me a message this morning" — and it must stop for good, not until the
+ * next sweep re-reads the same fourteen-day-old row and mints it again.
+ *
+ * TWO CONDITIONS, BOTH NECESSARY, and the second is the one that keeps this
+ * honest:
+ *
+ *   the contact was REPORTED after the absence was stated — it is newer
+ *   information, not something we already knew when they said it; and
+ *
+ *   the contact OCCURRED at or after the start of the window they were
+ *   talking about — it is about the same period. "Don came round last
+ *   month", mentioned today, contradicts nothing about this week, and a
+ *   rule that used reported time alone would silently treat it as if it
+ *   did.
+ *
+ * NO MODEL IS ASKED whether the old absence is still relevant. Four
+ * timestamps decide it, all of them stored.
+ *
+ * UNREADABLE TIMESTAMPS SUPERSEDE. An absence this code cannot place in
+ * time against the contact record is an absence it cannot justify raising;
+ * the cost of being wrong here is one missed nudge.
+ */
+export function absenceIsSuperseded(input: {
+  /** `reported_at` of the absence event — when the person said it. */
+  statedAtIso: string;
+  /** Start of the window they said nothing happened in. */
+  windowStartIso: string;
+  /** The newest positive contact recorded for that entity, if any. */
+  latestPositive: { occurredAtIso: string; reportedAtIso: string } | null;
+}): boolean {
+  if (input.latestPositive === null) return false;
+
+  const stated = Date.parse(input.statedAtIso);
+  const windowStart = Date.parse(input.windowStartIso);
+  const occurred = Date.parse(input.latestPositive.occurredAtIso);
+  const reported = Date.parse(input.latestPositive.reportedAtIso);
+  if ([stated, windowStart, occurred, reported].some((value) => Number.isNaN(value))) {
+    return true;
+  }
+
+  return reported > stated && occurred >= windowStart;
+}
+
 export function absenceDetectionKey(sourceEventId: string): string {
   return stableHash([DETECTION_METHOD_VERSION, "user_asserted_absence", sourceEventId]);
 }
@@ -59,6 +107,14 @@ export function detectAssertedAbsence(input: {
   event: AbsenceEventInput;
   /** Optional enrichment. Any status is fine, including none at all. */
   baseline: Baseline | null;
+  /**
+   * The newest positive contact recorded for this entity, if any (M12e.1).
+   *
+   * Supplied by the service layer, because the detector does no I/O. Absent
+   * or null means "nothing newer is known", which is how every caller
+   * written before this parameter behaves.
+   */
+  latestPositive?: { occurredAtIso: string; reportedAtIso: string } | null;
   now: Date;
   conversationId: string | null;
   config?: BaselineConfig;
@@ -76,6 +132,18 @@ export function detectAssertedAbsence(input: {
   if (event.certainty < config.minCertainty) return null;
   // A report from the future is a clock or ingestion fault, not evidence.
   if (event.reportedAt.getTime() > input.now.getTime()) return null;
+  // Overtaken by newer contact: not a weaker signal, no signal at all. This
+  // is what stops the same fourteen-day-old row being re-minted every sweep
+  // long after the person has told us they heard from them.
+  if (
+    absenceIsSuperseded({
+      statedAtIso: event.reportedAt.toISOString(),
+      windowStartIso: event.windowStart.toISOString(),
+      latestPositive: input.latestPositive ?? null,
+    })
+  ) {
+    return null;
+  }
 
   const detectionKey = absenceDetectionKey(event.id);
 

@@ -32,11 +32,13 @@ import {
   type SuppressionReason,
 } from "@/core/detection/suppression";
 import {
-  SignalExplanationSchema,
+  CadenceExplanationSchema,
+  AbsenceExplanationSchema,
   type DetectorEventType,
+  type ReconnectExplanation,
   type SignalCandidate,
-  type SignalExplanation,
 } from "@/core/detection/types";
+import { z } from "zod";
 import { isOpenOpportunity, type OpportunityStatus } from "@/core/consent/status";
 import { recoverStatedAbsencePhrase } from "@/core/memory/absence-phrase";
 import { ExtractionV1Schema } from "@/core/memory/extraction-contract";
@@ -147,6 +149,19 @@ export type DetectionSweepResult = {
   drafts: DraftResult[];
 };
 
+/**
+ * Read-side validation for a STORED reconnect explanation.
+ *
+ * Narrower than `SignalExplanationSchema` since M12e: resuming an abandoned
+ * cycle means completing a RECONNECT claim, and a wellbeing signal has no
+ * such cycle to resume. Parsing with the wide union here would let one
+ * through into code that then reaches for `eventType`.
+ */
+const ReconnectExplanationSchema = z.discriminatedUnion("detector", [
+  CadenceExplanationSchema,
+  AbsenceExplanationSchema,
+]);
+
 function logEvent(record: Record<string, unknown>): void {
   console.log(JSON.stringify(record));
 }
@@ -226,7 +241,7 @@ async function loadSuppressionSnapshot(
     input.now.getTime() - detectionSweepConfig.opportunityHistoryLookbackDays * DAY_MS,
   ).toISOString();
 
-  const [accountStartedAt, outstanding, open, recent] = await Promise.all([
+  const [accountStartedAt, outstanding, open, recent, presentable] = await Promise.all([
     resolveAccountStart(deps, input.userId, input.now),
     deps.familyRequests.countOutstandingForUser(input.userId, input.now.toISOString()),
     deps.opportunities.listOpenForUser(input.userId, detectionSweepConfig.openOpportunityLimit),
@@ -235,7 +250,23 @@ async function loadSuppressionSnapshot(
       since,
       detectionSweepConfig.opportunityHistoryLimit,
     ),
+    deps.entities.listPresentableForUser(input.userId, ENTITY_SCAN_LIMIT),
   ]);
+
+  /**
+   * HIDING SOMETHING MUST NOT COST THE PERSON ANYTHING (M12e.3).
+   *
+   * `maxOffersPerWeek` is a global cap: three offers across the whole
+   * account. An opportunity belonging to a development-seeded entity is
+   * never shown to anyone, so letting it consume one of those three would
+   * mean a test row quietly suppressing a real family nudge — a cooldown
+   * spent for a card nobody saw.
+   *
+   * Only the ACCOUNT-WIDE tallies are filtered. A dev entity's own
+   * cooldowns are left exactly as they are: they constrain that entity and
+   * nothing else, and that entity is invisible either way.
+   */
+  const presentableIds = new Set(presentable.map((entity) => entity.id));
 
   const opportunityBySignal = new Map<string, { id: string; status: OpportunityStatus }>();
   for (const opportunity of recent) {
@@ -257,7 +288,7 @@ async function loadSuppressionSnapshot(
   for (const opportunity of recent) {
     const offeredAt = toDate(opportunity.offeredAt);
     if (offeredAt !== null) {
-      offeredForAccount.push(offeredAt);
+      if (presentableIds.has(opportunity.entityId)) offeredForAccount.push(offeredAt);
       const forEntity = offeredForEntity.get(opportunity.entityId) ?? [];
       forEntity.push(offeredAt);
       offeredForEntity.set(opportunity.entityId, forEntity);
@@ -267,6 +298,7 @@ async function loadSuppressionSnapshot(
       // later because a pacing rule added after the flow it paces is a rule
       // nobody notices is missing.
       if (
+        presentableIds.has(opportunity.entityId) &&
         input.conversationId !== null &&
         conversationBySignal.get(opportunity.signalId) === input.conversationId
       ) {
@@ -464,11 +496,31 @@ async function collectCandidates(
       entityId: row.entityId,
       eventType: row.eventType,
     });
+    /**
+     * SUPERSESSION (M12e.1). One bounded read per absence row: has the
+     * person since reported being in contact with this entity, about the
+     * period they said they were not? If so the detector returns nothing —
+     * which is what stops the same fourteen-day-old assertion being
+     * re-minted into a reviewer-visible offer every sweep.
+     */
+    const latest =
+      row.windowStart === null
+        ? null
+        : await deps.interactionEvents.latestPositiveSince({
+            userId,
+            entityId: row.entityId,
+            sinceOccurredIso: row.windowStart,
+          });
+
     const candidate = detectAssertedAbsence({
       event: {
         ...toAbsenceInput(row, row.eventType),
         statedPhrase: await recoverPhrase(deps, { userId, row }),
       },
+      latestPositive:
+        latest === null
+          ? null
+          : { occurredAtIso: latest.occurredAt, reportedAtIso: latest.reportedAt },
       // Enrichment only. A missing baseline is not a reason to stay silent
       // about something the person told us outright.
       baseline: stored ? fromStored(stored) : null,
@@ -600,7 +652,11 @@ export async function runDetectionSweep(
     selected.length === 0
       ? [[], []]
       : await Promise.all([
-          deps.entities.listForUser(userId, ENTITY_SCAN_LIMIT),
+          // The names in here become the proposal, the draft and the card.
+          // A development-seeded entity gets no signal carried through to an
+          // opportunity at all (M12e.3) — `entity_missing`, which is exactly
+          // what it is from the presentation side.
+          deps.entities.listPresentableForUser(userId, ENTITY_SCAN_LIMIT),
           deps.relationships.listForUser(userId, RELATIONSHIP_SCAN_LIMIT),
         ]);
 
@@ -612,7 +668,7 @@ export async function runDetectionSweep(
    */
   const carryToOpportunity = async (ctx: {
     signalId: string;
-    explanation: SignalExplanation;
+    explanation: ReconnectExplanation;
     candidate: SignalCandidate;
     entityName: string;
     baselineRow: Awaited<ReturnType<BaselinesRepo["find"]>>;
@@ -874,7 +930,7 @@ export async function runDetectionSweep(
         continue;
       }
 
-      const parsed = SignalExplanationSchema.safeParse(existing.explanation);
+      const parsed = ReconnectExplanationSchema.safeParse(existing.explanation);
       if (!parsed.success) {
         // Cannot complete a cycle whose evidence no longer parses. Left
         // `detected` and logged, for the same reason an integrity failure is.
@@ -1011,6 +1067,14 @@ export async function runDetectionSweep(
   };
 }
 
+/**
+ * Thrown to leave the render block without calling a provider. A control
+ * signal, never logged as a failure — see `modelMayRender`.
+ */
+class SkipRenderer extends Error {
+  readonly name = "SkipRenderer";
+}
+
 /** The fallback, re-guarded. Sanitized labels make this total in practice. */
 function guardedFallback(payload: SharePayload): string {
   const template = buildFallbackText(payload);
@@ -1076,12 +1140,28 @@ export async function draftOpportunity(
     profile: { familyDisplayName: profile?.familyDisplayName ?? null },
   });
 
+  /**
+   * A WELLBEING SHARE IS NEVER MODEL-RENDERED (M12e).
+   *
+   * Not "rendered and then guarded" — not rendered. This is the one topic
+   * where the message is about the person's own body, and a sentence a model
+   * wrote about that is a sentence nobody can account for. The deterministic
+   * text in `buildFallbackText` is the whole renderer, it interpolates one
+   * already-sanitized label, and it is still put through the same outbound
+   * guard as everything else.
+   *
+   * `rendererCalled: false` on this path is therefore a fact worth logging
+   * rather than an omission: "no model wrote this" is checkable in the log.
+   */
+  const modelMayRender = payload.topic !== "wellbeing";
+
   // ONE attempt. A failure is not retried with a repair prompt: repairing
   // unsafe output with the same kind of component that produced it is a retry,
   // not a safety mechanism.
   let candidate: string | null = null;
   let rendererCalled = false;
   try {
+    if (!modelMayRender) throw new SkipRenderer();
     rendererCalled = true;
     const rendered = await deps.familyRender.render({
       promptRef: familyRenderPromptV2.ref,
@@ -1089,11 +1169,13 @@ export async function draftOpportunity(
     });
     candidate = rendered.text;
   } catch (error) {
-    logEvent({
-      event: "reconnect.render_failed",
-      opportunityId: opportunity.id,
-      errorName: error instanceof Error ? error.name : "UnknownError",
-    });
+    if (!(error instanceof SkipRenderer)) {
+      logEvent({
+        event: "reconnect.render_failed",
+        opportunityId: opportunity.id,
+        errorName: error instanceof Error ? error.name : "UnknownError",
+      });
+    }
   }
 
   const verdict =
@@ -1114,7 +1196,13 @@ export async function draftOpportunity(
     opportunityId: opportunity.id,
     promptRef: familyRenderPromptV2.ref,
     rendererCalled,
-    guardOutcome: accepted ? "accepted" : candidate === null ? "render_unavailable" : "rejected",
+    guardOutcome: accepted
+      ? "accepted"
+      : !modelMayRender
+        ? "renderer_not_permitted"
+        : candidate === null
+          ? "render_unavailable"
+          : "rejected",
     guardFailures,
     fallbackUsed: !accepted,
   });

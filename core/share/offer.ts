@@ -69,9 +69,33 @@ export function transcriptShowsDraft(
  */
 export function needsRepresenting(
   messages: ReadonlyArray<TranscriptMessage>,
-  input: { renderedText: string; offeredAt: string },
+  input: {
+    renderedText: string;
+    offeredAt: string;
+    /**
+     * Epoch ms of the oldest message in the CURRENT sitting, from
+     * `currentSitting`. Null when the window holds no readable timestamps.
+     *
+     * WHY RECOVERY NEEDS A BOUND (M12e). The test below is "does the recent
+     * transcript contain these bytes", and the recent transcript is the last
+     * `chatConfig.recentTurnLimit` (20) messages. An offer presented
+     * correctly therefore stops being visible to this function after ten
+     * exchanges, at which point every later turn concluded that the earlier
+     * one had died and showed the same card again — the observed "again
+     * later with effectively the same unchanged card". The bug was never in
+     * the substring test; it was in asking a sliding window a question about
+     * all of history.
+     *
+     * A crashed stream is a failure that happens SECONDS ago, in the sitting
+     * you are still in. Outside that, an unshown card is a missed nudge,
+     * which costs far less than a card that reappears unexplained.
+     */
+    sittingStartedAtMs: number | null;
+  },
 ): boolean {
   const since = Date.parse(input.offeredAt);
+  if (Number.isNaN(since)) return false;
+  if (input.sittingStartedAtMs === null || since < input.sittingStartedAtMs) return false;
   const after = messages.filter(
     (message) => message.role === "assistant" && Date.parse(message.createdAt) >= since,
   );
@@ -139,6 +163,10 @@ export function buildCadencePreamble(proposal: ReconnectProposal): string | null
   if (proposal.observation.kind !== "no_mention_since") return null;
 
   const elapsed = proposal.observation.days;
+  // A cadence observation always carries the event type it was computed
+  // from; the optionality exists for the wellbeing proposal, which returned
+  // null on the line above.
+  if (proposal.eventType === undefined) return null;
   const verb = contactVerb(proposal.eventType);
   const median = proposal.pattern?.medianGapDays;
 

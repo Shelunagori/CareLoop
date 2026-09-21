@@ -14,6 +14,15 @@ export type FamilyContactRecord = {
 };
 
 export type FamilyContactsRepo = {
+  /**
+   * Every contact the user has configured, bounded.
+   *
+   * Added for the wellbeing share (M12e), which — unlike a reconnect offer —
+   * is not ABOUT a particular person, so it has to work out who could
+   * receive it. The rule that consumes this refuses to guess: one contact
+   * means one recipient, and anything else means no offer.
+   */
+  listForUser(userId: string, limit: number): Promise<FamilyContactRecord[]>;
   findForEntity(userId: string, entityId: string): Promise<FamilyContactRecord | null>;
   /**
    * The contact for ONE channel.
@@ -65,6 +74,17 @@ const toRecord = (row: Row): FamilyContactRecord => ({
 
 export function familyContactsRepo(db: Db): FamilyContactsRepo {
   return {
+    async listForUser(userId, limit) {
+      const { data, error } = await db
+        .from("family_contacts")
+        .select(SELECT)
+        .eq("user_id", userId)
+        .order("created_at", { ascending: true })
+        .limit(limit);
+      if (error) throw new Error(`listFamilyContacts failed: ${error.message}`);
+      return (data ?? []).map(toRecord);
+    },
+
     async findForEntity(userId, entityId) {
       const { data, error } = await db
         .from("family_contacts")

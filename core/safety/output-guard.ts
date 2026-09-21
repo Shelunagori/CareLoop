@@ -46,6 +46,14 @@ const QUESTION_MARKERS: Record<ClosedReconnectQuestion, RegExp> = {
     /\b(visit|visits|visiting|come over|coming over|come round|coming round|come by|coming by|pop in|pop by|pop round|pop over|drop in|drop by|drop round|see him|see her|see them)\b/i,
   ask_if_calling:
     /\b(call|calls|calling|ring|rings|ringing|phone|phones|speak to|chat to|catch up on the phone)\b/i,
+  /**
+   * M12e. A wellbeing message is written by application code, never by a
+   * renderer, so this marker is only ever exercised by the fallback's own
+   * re-guard. It is present because the record is total by type: a question
+   * the guard has no marker for would be a question the guard cannot check.
+   */
+  ask_if_checking_in:
+    /\b(check in|checking in|check on|checking on|call|calls|calling|ring|rings|ringing|phone|phones|get in touch|look in on)\b/i,
 };
 
 /**

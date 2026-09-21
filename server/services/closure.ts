@@ -13,6 +13,7 @@ import {
 } from "@/core/family/closure";
 import { FamilyReplySchema } from "@/core/family/response";
 import { SharePayloadSchema } from "@/core/share/payload";
+import { presentableName } from "@/core/memory/provenance";
 
 /**
  * Closing the loop back to the older adult (docs/04 section 12.3).
@@ -97,9 +98,10 @@ async function describeClosure(
   const payload = SharePayloadSchema.safeParse(request.payload);
   if (!payload.success) return null;
 
-  const entities = await deps.entities.listForUser(userId, ENTITY_SCAN_LIMIT);
-  const entityName =
-    entities.find((entity) => entity.id === opportunity.entityId)?.displayName ?? null;
+  // The closure sentence is read aloud to the person, so the same
+  // provenance rule applies here as to the card (M12e.3).
+  const entities = await deps.entities.listPresentableForUser(userId, ENTITY_SCAN_LIMIT);
+  const entityName = presentableName(entities.find((entity) => entity.id === opportunity.entityId));
   if (entityName === null) return null;
 
   const fact: ClosureFact = {
@@ -172,9 +174,8 @@ export async function loadAwaitingFamilyReply(
   const opportunity = await deps.opportunities.findOwnedById(request.opportunityId, input.userId);
   if (!opportunity) return null;
 
-  const entities = await deps.entities.listForUser(input.userId, ENTITY_SCAN_LIMIT);
-  const entityName =
-    entities.find((entity) => entity.id === opportunity.entityId)?.displayName ?? null;
+  const entities = await deps.entities.listPresentableForUser(input.userId, ENTITY_SCAN_LIMIT);
+  const entityName = presentableName(entities.find((entity) => entity.id === opportunity.entityId));
   // No name, no marker. "A message was sent to someone" is not worth saying,
   // and a placeholder is the kind of thing that ends up read aloud.
   if (entityName === null) return null;

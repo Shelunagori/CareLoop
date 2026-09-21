@@ -39,6 +39,7 @@ import type { ConversationDataDeps, ConversationDeps } from "./conversation";
 import type { IngestionDeps } from "./ingestion";
 import type { BaselineDebugDeps } from "./baseline-debug";
 import type { ReconnectDeps } from "./reconnect";
+import type { WellbeingDeps } from "./wellbeing";
 import type { DetectionDebugDeps } from "./detection-debug";
 import type { ConsentDeps, ConsentTurnHooksSource } from "./consent-hooks";
 import { buildConsentHooks } from "./consent-hooks";
@@ -98,6 +99,7 @@ function createConsentHookSource(db: ReturnType<typeof createServiceRoleClient>)
       opportunities: opportunitiesRepo(db),
       consentGrants: consentGrantsRepo(db),
       entities: entitiesRepo(db),
+      interactionEvents: interactionEventsRepo(db),
     },
     closure: {
       clock: systemClock,
@@ -118,6 +120,7 @@ export function createConsentDeps(): ConsentDeps {
     opportunities: opportunitiesRepo(db),
     consentGrants: consentGrantsRepo(db),
     entities: entitiesRepo(db),
+    interactionEvents: interactionEventsRepo(db),
   };
 }
 
@@ -356,6 +359,18 @@ export function createReconnectDeps(): ReconnectDeps {
     conversations: conversationsRepo(db),
     familyRender: createCloudflareFamilyRender(),
   };
+}
+
+/**
+ * The wellbeing share (M12e) is the reconnect chain plus one read: which
+ * family contacts exist, so a recipient can be established rather than
+ * chosen. It deliberately shares `createReconnectDeps` rather than
+ * assembling its own — the guarantees it needs are that chain's guarantees,
+ * and a separate wiring is how two paths start to differ.
+ */
+export function createWellbeingDeps(): WellbeingDeps {
+  const db = createServiceRoleClient();
+  return { ...createReconnectDeps(), familyContacts: familyContactsRepo(db) };
 }
 
 /** Read-only deps for the development detection inspector. */

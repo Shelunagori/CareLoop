@@ -8,7 +8,7 @@ import type { FamilyRequestsRepo } from "@/server/repositories/family-requests";
 import { DAY_MS } from "@/core/baseline/day";
 import { chatConfig } from "@/server/config";
 import { currentSitting } from "@/core/detection/presentation";
-import { sanitizeLabel } from "@/core/share/minimize";
+import { presentableName } from "@/core/memory/provenance";
 import {
   decideOpening,
   renderOpening,
@@ -32,7 +32,7 @@ import {
 export type OpeningDeps = {
   clock: Clock;
   interactionEvents: Pick<InteractionEventsRepo, "listRecentPositive">;
-  entities: Pick<EntitiesRepo, "listForUser">;
+  entities: Pick<EntitiesRepo, "listPresentableForUser">;
   messages: Pick<MessagesRepo, "listRecent">;
   opportunities: Pick<OpportunitiesRepo, "listOpenForUser">;
   familyRequests: Pick<FamilyRequestsRepo, "countOutstandingForUser">;
@@ -61,7 +61,7 @@ export async function loadOpeningLine(
       sinceOccurredIso: since,
       limit: EVENT_SCAN_LIMIT,
     }),
-    deps.entities.listForUser(input.userId, ENTITY_SCAN_LIMIT),
+    deps.entities.listPresentableForUser(input.userId, ENTITY_SCAN_LIMIT),
     deps.opportunities.listOpenForUser(input.userId, OPPORTUNITY_SCAN_LIMIT),
     deps.familyRequests.countOutstandingForUser(input.userId, now.toISOString()),
     input.conversationId
@@ -69,14 +69,22 @@ export async function loadOpeningLine(
       : Promise.resolve([]),
   ]);
 
-  const nameById = new Map(entities.map((entity) => [entity.id, entity.displayName]));
+  // Provenance first, then the label rule — `presentableEntity` does both,
+  // and an entity that fails either simply has no name here, so the
+  // candidate filter below drops it (M12e.3).
+  const nameById = new Map(
+    entities.flatMap((entity) => {
+      const name = presentableName(entity);
+      return name === null ? [] : [[entity.id, name] as const];
+    }),
+  );
 
   const candidates: OpeningCandidate[] = events.flatMap((event) => {
     if (event.eventType !== "visit" && event.eventType !== "call") return [];
     // The same presentation rule the reconnect card uses. An opening that
     // said "How did the visit with M4Absence1789574558 go?" would be the
     // previous milestone's bug with a friendlier voice.
-    const entityName = sanitizeLabel(nameById.get(event.entityId) ?? null);
+    const entityName = nameById.get(event.entityId) ?? null;
     if (entityName === null) return [];
     return [
       {

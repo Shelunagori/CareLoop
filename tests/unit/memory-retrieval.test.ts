@@ -14,6 +14,7 @@ function entity(id: string, name: string, extra: Partial<EntityRecord> = {}): En
     displayName: name,
     aliases: [],
     status: "active",
+    origin: "user" as const,
     lastMentionedAt: null,
     ...extra,
   };
@@ -27,6 +28,10 @@ function deps(options: {
 }): MemoryRetrievalDeps {
   return {
     entities: {
+      async listPresentableForUser(userId: string, limit: number) {
+      const all = await this.listForUser(userId, limit);
+      return all.filter((row) => row.origin !== "dev");
+    },
       async listForUser() {
         return options.entities ?? [];
       },
@@ -208,7 +213,7 @@ describe("mentionedNow", () => {
       deps({
         entities: [
           entity("e1", "Margaret"),
-          entity("e2", "Alan", { lastMentionedAt: recent(1) }),
+          entity("e2", "Alan", { origin: "user" as const, lastMentionedAt: recent(1) }),
         ],
       }),
       { userId: USER, text: "Margaret came round today", now: NOW },

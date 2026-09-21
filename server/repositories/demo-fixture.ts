@@ -138,6 +138,10 @@ export function demoFixtureRepo(db: Db): DemoFixtureRepo {
         subtype: input.subtype,
         display_name: input.displayName,
         aliases: [...input.aliases],
+        // The fixture says so itself (M12e). `demo` is presentable — the
+        // seeded demo IS the product a reviewer is shown — but it is not
+        // `user`, so "where did George come from" has an answer in the row.
+        origin: "demo",
       });
       if (error) throw new Error(`createDemoEntity failed: ${error.message}`);
     },

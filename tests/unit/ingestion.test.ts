@@ -151,6 +151,7 @@ describe("3-5. entity resolution", () => {
       displayName: "John",
       aliases: ["Johnny"],
       status: "active",
+      origin: "user" as const,
       lastMentionedAt: null,
     });
 
@@ -185,8 +186,8 @@ describe("3-5. entity resolution", () => {
 
   it("5. does NOT silently merge when two people share a name", async () => {
     store.entities.push(
-      { id: "e-john-1", type: "person", subtype: null, displayName: "John", aliases: [], status: "active", lastMentionedAt: null },
-      { id: "e-john-2", type: "person", subtype: null, displayName: "John", aliases: [], status: "active", lastMentionedAt: null },
+      { id: "e-john-1", type: "person", subtype: null, displayName: "John", aliases: [], status: "active", origin: "user" as const, lastMentionedAt: null },
+      { id: "e-john-2", type: "person", subtype: null, displayName: "John", aliases: [], status: "active", origin: "user" as const, lastMentionedAt: null },
     );
 
     const extraction: ExtractionV1 = {

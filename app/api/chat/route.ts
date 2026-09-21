@@ -10,10 +10,12 @@ import {
   createFamilySendDeps,
   createIngestionDeps,
   createReconnectDeps,
+  createWellbeingDeps,
 } from "@/server/services/deps";
 import { ingestionConfig } from "@/server/config";
 import { runIngestionSweep } from "@/server/services/ingestion";
 import { runDetectionSweep } from "@/server/services/reconnect";
+import { noteWellbeingSelfReport } from "@/server/services/wellbeing";
 import {
   expireOverdueFamilyRequests,
   sendApprovedOpportunity,
@@ -150,6 +152,36 @@ export async function POST(request: Request) {
       console.error(
         JSON.stringify({
           event: "ingest.sweep_failed",
+          errorName: error instanceof Error ? error.name : "UnknownError",
+        }),
+      );
+    }
+
+    /**
+     * M12e. An explicit wellbeing self-report, and whether the person may be
+     * OFFERED the chance to pass it on.
+     *
+     * Here, after the reply, for the same reason everything else in this
+     * block is: the warm answer has already reached them, and nothing in
+     * this path may cost them a reply. It runs BEFORE the detection sweep so
+     * that a wellbeing share and a reconnect offer cannot both be created
+     * for the same person in one turn — the materialize RPC refuses the
+     * second, and the one the person actually raised should win.
+     *
+     * Its own try/catch: not being offered a share is a missed nudge;
+     * failing the turn over it would be a bug.
+     */
+    try {
+      await noteWellbeingSelfReport(createWellbeingDeps(), {
+        userId,
+        conversationId: turn.conversationId,
+        userMessageId: turn.userMessageId,
+        text: parsed.data.text,
+      });
+    } catch (error) {
+      console.error(
+        JSON.stringify({
+          event: "wellbeing.failed",
           errorName: error instanceof Error ? error.name : "UnknownError",
         }),
       );

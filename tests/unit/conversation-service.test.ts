@@ -246,6 +246,9 @@ describe("the reconnect card's lifecycle is the server's to decide", () => {
         },
       },
       entities: {
+        async listPresentableForUser() {
+          return this.listForUser();
+        },
         async listForUser() {
           return [
             {
@@ -255,6 +258,7 @@ describe("the reconnect card's lifecycle is the server's to decide", () => {
               displayName: "John",
               aliases: [],
               status: "active" as const,
+              origin: "user" as const,
               lastMentionedAt: null,
             },
           ];

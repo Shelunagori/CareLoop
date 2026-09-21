@@ -14,7 +14,15 @@ import type { Baseline } from "@/core/baseline/compute";
 export const DETECTION_METHOD_VERSION = "detection.v1";
 
 export type DetectorEventType = "visit" | "call";
-export type SignalType = "cadence_gap" | "user_asserted_absence";
+export type SignalType =
+  | "cadence_gap"
+  | "user_asserted_absence"
+  /**
+   * M12e. The person SAID they were unwell. Not a detector in the
+   * statistical sense at all — there is nothing to infer, because the
+   * evidence is their own sentence.
+   */
+  | "self_reported_wellbeing";
 
 /** Baseline facts safe to attach to a signal: statistics and provenance. */
 export type BaselineSummary = {
@@ -72,7 +80,37 @@ export type AbsenceExplanation = {
   conversationId: string | null;
 };
 
-export type SignalExplanation = CadenceExplanation | AbsenceExplanation;
+/**
+ * The wellbeing self-report, as an audit row (M12e).
+ *
+ * Read what is missing and could so easily have been added: no severity, no
+ * symptom, no duration, no quoted phrase, no baseline, no trend. The
+ * explanation records WHICH message the person said it in and WHEN — the
+ * two facts needed to find it again and to expire it — and stops there. A
+ * field for "how bad" would be the first line of a clinical record, and
+ * this product is not one.
+ */
+export type WellbeingExplanation = {
+  detector: "self_reported_wellbeing";
+  methodVersion: string;
+  detectionKey: string;
+  /** The recipient a share would go to, not a subject of any claim. */
+  entityId: string;
+  sourceMessageId: string;
+  reportedAt: string;
+  conversationId: string | null;
+};
+
+/**
+ * The two explanations that describe a gap between two people, and so the
+ * two that can become a ReconnectProposal. A wellbeing self-report is not
+ * one of them — it is about the user, not about a relationship — and
+ * `buildProposal` takes this narrower type so that stays true by the type
+ * checker rather than by convention.
+ */
+export type ReconnectExplanation = CadenceExplanation | AbsenceExplanation;
+
+export type SignalExplanation = ReconnectExplanation | WellbeingExplanation;
 
 /**
  * A detector's output before anything is persisted.
@@ -85,7 +123,14 @@ export type SignalCandidate = {
   entityId: string;
   eventType: DetectorEventType;
   detectionKey: string;
-  explanation: SignalExplanation;
+  /**
+   * Narrower than `SignalExplanation` on purpose (M12e): a candidate is the
+   * output of a DETECTOR examining stored evidence about two people. A
+   * wellbeing self-report has no detector and never becomes one of these —
+   * it is written straight from the person's sentence by
+   * `server/services/wellbeing.ts`.
+   */
+  explanation: ReconnectExplanation;
   priority: number;
   /** Epoch ms of the evidence this candidate rests on. */
   orderedAt: number;
@@ -141,7 +186,18 @@ export const AbsenceExplanationSchema = z.object({
   conversationId: z.string().nullable(),
 });
 
+export const WellbeingExplanationSchema = z.object({
+  detector: z.literal("self_reported_wellbeing"),
+  methodVersion: z.string(),
+  detectionKey: z.string().min(1),
+  entityId: z.string().min(1),
+  sourceMessageId: z.string().min(1),
+  reportedAt: z.string(),
+  conversationId: z.string().nullable(),
+});
+
 export const SignalExplanationSchema = z.discriminatedUnion("detector", [
   CadenceExplanationSchema,
   AbsenceExplanationSchema,
+  WellbeingExplanationSchema,
 ]);

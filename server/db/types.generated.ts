@@ -211,6 +211,7 @@ export type Database = {
           id: string
           last_mentioned_at: string | null
           mention_count: number
+          origin: Database["public"]["Enums"]["entity_origin"]
           status: Database["public"]["Enums"]["entity_status"]
           subtype: string | null
           type: Database["public"]["Enums"]["entity_type"]
@@ -223,6 +224,7 @@ export type Database = {
           id?: string
           last_mentioned_at?: string | null
           mention_count?: number
+          origin?: Database["public"]["Enums"]["entity_origin"]
           status?: Database["public"]["Enums"]["entity_status"]
           subtype?: string | null
           type: Database["public"]["Enums"]["entity_type"]
@@ -235,6 +237,7 @@ export type Database = {
           id?: string
           last_mentioned_at?: string | null
           mention_count?: number
+          origin?: Database["public"]["Enums"]["entity_origin"]
           status?: Database["public"]["Enums"]["entity_status"]
           subtype?: string | null
           type?: Database["public"]["Enums"]["entity_type"]
@@ -978,6 +981,7 @@ export type Database = {
     Enums: {
       baseline_status: "NO_BASELINE" | "IRREGULAR" | "ACTIVE"
       conversation_channel: "text" | "voice"
+      entity_origin: "user" | "demo" | "dev"
       entity_status: "active" | "needs_confirmation" | "merged_into"
       entity_type: "person" | "pet" | "place" | "org"
       event_polarity: "positive" | "absence"
@@ -996,7 +1000,10 @@ export type Database = {
         | "declined"
         | "expired"
       signal_status: "detected" | "materialized" | "suppressed"
-      signal_type: "cadence_gap" | "user_asserted_absence"
+      signal_type:
+        | "cadence_gap"
+        | "user_asserted_absence"
+        | "self_reported_wellbeing"
       time_precision: "exact" | "day" | "week" | "unknown"
     }
     CompositeTypes: {
@@ -1127,6 +1134,7 @@ export const Constants = {
     Enums: {
       baseline_status: ["NO_BASELINE", "IRREGULAR", "ACTIVE"],
       conversation_channel: ["text", "voice"],
+      entity_origin: ["user", "demo", "dev"],
       entity_status: ["active", "needs_confirmation", "merged_into"],
       entity_type: ["person", "pet", "place", "org"],
       event_polarity: ["positive", "absence"],
@@ -1146,7 +1154,11 @@ export const Constants = {
         "expired",
       ],
       signal_status: ["detected", "materialized", "suppressed"],
-      signal_type: ["cadence_gap", "user_asserted_absence"],
+      signal_type: [
+        "cadence_gap",
+        "user_asserted_absence",
+        "self_reported_wellbeing",
+      ],
       time_precision: ["exact", "day", "week", "unknown"],
     },
   },

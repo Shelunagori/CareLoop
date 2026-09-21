@@ -447,8 +447,20 @@ describe("3. the fixture needs no schema of its own", () => {
   it("the demo added no migration", async () => {
     // M6 is a fixture, not a schema change. If this ever needs to grow, that
     // is a conversation, not a commit.
+    // Named rather than counted (M12e): the claim is "M6 added nothing", and
+    // a count says that only until somebody else adds one. Every migration
+    // below belongs to an earlier or a later milestone, and none to the demo.
     const { readdirSync } = await import("node:fs");
     const migrations = readdirSync("supabase/migrations").filter((f) => f.endsWith(".sql"));
-    expect(migrations).toHaveLength(5);
+    expect(migrations.filter((f) => /demo|fixture|george/i.test(f))).toEqual([]);
+    expect(migrations.sort()).toEqual([
+      "20260916120000_init_schema.sql",
+      "20260916120100_rls.sql",
+      "20260916130000_m2_ingestion_support.sql",
+      "20260916140000_m4_materialize_signal.sql",
+      "20260916150000_m5_consent_and_family.sql",
+      "20260921120000_m12e_entity_provenance.sql",
+      "20260921120100_m12e_wellbeing_signal.sql",
+    ]);
   });
 });

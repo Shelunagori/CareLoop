@@ -1,8 +1,4 @@
 import { Chat, type ChatMessage } from "@/app/_components/chat";
-import { DemoResetButton } from "@/app/_components/dev-tools";
-import { DemoHint } from "@/app/_components/dev-hint";
-import { FamilyInboxLink } from "@/app/_components/dev-operator";
-import { resetDemoAction } from "@/app/_actions/demo";
 import {
   configureDemoContactAction,
   readDemoContactAddress,
@@ -35,20 +31,40 @@ export default async function Page() {
   if (!userId && demoMode) return <StartDemo action={startDemoAction} />;
 
   if (!userId) {
+    /**
+     * THE ONE DEVELOPER SCREEN THAT WAS NOT GATED (M12e).
+     *
+     * This page printed an environment-variable name, a local config file
+     * name and Supabase dashboard instructions to ANY visitor with no
+     * session — including, on a deployment running without
+     * `CARELOOP_DEMO_MODE`, the public. Every other development affordance
+     * in this application sits behind `isDebugSurfaceEnabled`; this one was
+     * behind `!userId`, which is not the same condition and never was.
+     *
+     * The setup instructions are worth keeping — they are how a developer
+     * finds out what is wrong — so they are gated rather than deleted, and
+     * `isDebugSurfaceEnabled` is decided on the SERVER, so the strings do
+     * not reach a production bundle at all.
+     */
+    const setupHint = isDebugSurfaceEnabled(process.env);
     return (
       <main className="mx-auto max-w-xl space-y-3 px-6 py-10">
         <h1 className="text-[1.7rem] font-semibold tracking-tight">CareLoop</h1>
         <p className="text-[var(--color-muted)]">
-          No signed-in companion user. Sign-in arrives in a later milestone.
+          {setupHint
+            ? "No signed-in companion user. Sign-in arrives in a later milestone."
+            : "Please sign in to continue."}
         </p>
-        <p className="text-[0.9rem] text-[var(--color-muted)]">
-          For local development, create a user in the Supabase dashboard
-          (Authentication → Users → Add user) and set its UUID as{" "}
-          <code className="rounded bg-[var(--color-surface-muted)] px-1">
-            CARELOOP_DEV_USER_ID
-          </code>{" "}
-          in <code className="rounded bg-[var(--color-surface-muted)] px-1">.env.local</code>.
-        </p>
+        {setupHint && (
+          <p className="text-[0.9rem] text-[var(--color-muted)]">
+            For local development, create a user in the Supabase dashboard
+            (Authentication → Users → Add user) and set its UUID as{" "}
+            <code className="rounded bg-[var(--color-surface-muted)] px-1">
+              CARELOOP_DEV_USER_ID
+            </code>{" "}
+            in your local environment file.
+          </p>
+        )}
       </main>
     );
   }
@@ -82,12 +98,24 @@ export default async function Page() {
       content: message.content,
     }));
 
-  // Development only, and decided on the SERVER. In production neither the
-  // control nor the hint is rendered, and neither reaches the client bundle.
-  const isDev = isDebugSurfaceEnabled(process.env);
-  // A reviewer may restart their OWN demo. Distinct from the developer reset
-  // above in wording and in authorization, and offered only to the anonymous
-  // account that owns the data it would restore.
+  /**
+   * NO DEVELOPER CONTROLS ON THIS PAGE, IN ANY ENVIRONMENT (M12e.3).
+   *
+   * "Reset demo — development only" and "Family inbox (dev)" used to render
+   * in the chat header behind `isDebugSurfaceEnabled`. That was correctly
+   * gated and still wrong: this is the surface a reviewer records, and
+   * scaffolding in shot is scaffolding in shot whether or not it ships to
+   * production. Marking a control "(dev)" explains it without removing it.
+   *
+   * Both controls, and the demo hint, now live on `/dev` behind the same
+   * four-condition gate `/dev/family-inbox` uses. Nothing was loosened and
+   * no new way in was invented — the controls simply moved to the door they
+   * already belonged behind.
+   *
+   * What is left in this slot is product UI: a public-demo visitor may
+   * start their OWN demo over. It says nothing about development, and it is
+   * authorized by owning the anonymous session rather than by a dev secret.
+   */
   const canRestartDemo = demoMode && identity.isAnonymous;
 
   return (
@@ -97,17 +125,7 @@ export default async function Page() {
       initialMessages={initialMessages}
       initialPendingOffer={view.pendingOffer}
       displayName={view.displayName}
-      devTools={
-        isDev ? (
-          <div className="flex items-start gap-2">
-            <FamilyInboxLink />
-            <DemoResetButton action={resetDemoAction} />
-          </div>
-        ) : canRestartDemo ? (
-          <DemoRestartButton action={resetDemoSessionAction} />
-        ) : null
-      }
-      demoHint={isDev ? <DemoHint /> : null}
+      devTools={canRestartDemo ? <DemoRestartButton action={resetDemoSessionAction} /> : null}
     />
   );
 }

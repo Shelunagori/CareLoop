@@ -98,7 +98,7 @@ describe("3. the debug inspector proves the stored draft rather than restating i
   function storeWith(renderedText: string | null, hash: string | null, sharePayload: unknown): ReconnectStore {
     return createStore({
       entities: [
-        { id: "e1", type: "person", subtype: null, displayName: "John", aliases: [], status: "active", lastMentionedAt: null },
+        { id: "e1", type: "person", subtype: null, displayName: "John", aliases: [], status: "active", origin: "user" as const, lastMentionedAt: null },
       ],
       signals: [
         {

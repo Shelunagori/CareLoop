@@ -313,6 +313,22 @@ export function fakeReconnectDeps(input: {
     },
 
     interactionEvents: {
+      /**
+       * The real ordering, so a supersession test cannot pass against a
+       * fake that simply returns the first row it finds.
+       */
+      async latestPositiveSince({ entityId, sinceOccurredIso }) {
+        return (
+          store.interactionEvents
+            .filter(
+              (e) =>
+                e.entityId === entityId &&
+                e.polarity === "positive" &&
+                e.occurredAt >= sinceOccurredIso,
+            )
+            .sort((a, b) => b.reportedAt.localeCompare(a.reportedAt))[0] ?? null
+        );
+      },
       async listRecentPositive() {
         // Not a concern here: the proactive opening is tested on its own.
         return [];
@@ -339,6 +355,12 @@ export function fakeReconnectDeps(input: {
       async listForUser() {
         return store.entities;
       },
+      /** Mirrors the SQL filter: presentation never sees a `dev` row. */
+      async listPresentableForUser(userId: string, limit: number) {
+        const all = await this.listForUser(userId, limit);
+        return all.filter((row) => row.origin !== "dev");
+      },
+
       async listRecentlyMentioned() {
         return [];
       },

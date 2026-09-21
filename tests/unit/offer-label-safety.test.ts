@@ -36,7 +36,7 @@ function storeWithLabel(displayName: string): M5Store {
       entities: [
         {
           id: ENTITY, type: "person", subtype: null, displayName,
-          aliases: [], status: "active", lastMentionedAt: null,
+          aliases: [], status: "active", origin: "user" as const, lastMentionedAt: null,
         },
       ],
     }),

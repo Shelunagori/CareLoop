@@ -1,4 +1,4 @@
-import type { ReconnectProposal } from "@/core/detection/proposal";
+import { proposalTopic, type ReconnectProposal } from "@/core/detection/proposal";
 import { findDeniedTerm } from "@/core/safety/deny-list";
 import { shareConfig } from "./config";
 import type { SharePayload } from "./payload";
@@ -53,9 +53,15 @@ export function minimize(input: {
 
   const timeframe = sanitizeLabel(proposal.timeframe) ?? undefined;
 
+  /**
+   * `visit` when the proposal says neither — the pre-M12e default, which is
+   * what `buildProposal` has always produced for a visit series. A payload
+   * has to carry a topic, and the schema's superRefine has already refused
+   * any proposal that reaches here without a coherent one.
+   */
   const payload: SharePayload = {
     fromDisplayName: from,
-    topic: proposal.eventType,
+    topic: proposalTopic(proposal) ?? "visit",
     question: proposal.question,
   };
   if (about !== undefined) payload.aboutEntityName = about;

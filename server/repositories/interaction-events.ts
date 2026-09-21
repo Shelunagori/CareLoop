@@ -79,6 +79,24 @@ export type InteractionEventsRepo = {
     sinceOccurredIso: string;
     limit: number;
   }): Promise<InteractionEventRecord[]>;
+  /**
+   * The newest positive contact for ONE entity that happened at or after a
+   * cutoff, by `reported_at`. Null when there is none (M12e.1).
+   *
+   * This is the supersession read: "has the person since told us they were
+   * in touch with Don, about the period they said they were not?". Bounded
+   * to one row, filtered to `positive` in the QUERY — an absence assertion
+   * must not be able to answer this question even by accident.
+   *
+   * Ordered by `reported_at` rather than `occurred_at` because the question
+   * is which piece of information is NEWER, and the occurred/reported split
+   * exists so those two are never confused (docs/02 section 7).
+   */
+  latestPositiveSince(input: {
+    userId: string;
+    entityId: string;
+    sinceOccurredIso: string;
+  }): Promise<InteractionEventRecord | null>;
 };
 
 const SELECT =
@@ -181,6 +199,21 @@ export function interactionEventsRepo(db: Db): InteractionEventsRepo {
         .limit(limit);
       if (error) throw new Error(`listRecentPositive failed: ${error.message}`);
       return (data ?? []).map(toRecord);
+    },
+
+    async latestPositiveSince({ userId, entityId, sinceOccurredIso }) {
+      const { data, error } = await db
+        .from("interaction_events")
+        .select(SELECT)
+        .eq("user_id", userId)
+        .eq("entity_id", entityId)
+        .eq("polarity", "positive")
+        .gte("occurred_at", sinceOccurredIso)
+        .order("reported_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error) throw new Error(`latestPositiveSince failed: ${error.message}`);
+      return data ? toRecord(data) : null;
     },
 
     async earliestOccurredAt(userId) {

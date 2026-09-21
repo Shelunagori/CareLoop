@@ -225,7 +225,12 @@ export async function createAuthorizedRequest(
     return fail({ outcome: "integrity_failure", failure: precheck.failure });
   }
 
-  const entities = await deps.entities.listForUser(input.userId, ENTITY_SCAN_LIMIT);
+  // A development-seeded row is not somebody to write to, and this read is
+  // one line above the transaction that spends the consent (M12e.3). The
+  // failure is `entity_not_found` on purpose: from here the row genuinely
+  // does not exist, and inventing a second outcome would mean two callers
+  // deciding what "cannot send" means.
+  const entities = await deps.entities.listPresentableForUser(input.userId, ENTITY_SCAN_LIMIT);
   const entity = entities.find((row) => row.id === opportunity.entityId);
   if (!entity) return fail({ outcome: "integrity_failure", failure: "entity_not_found" });
 

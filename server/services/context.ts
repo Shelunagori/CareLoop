@@ -68,6 +68,18 @@ export type MemorySections = {
   awaitingFamilyReply: AwaitingFamilyReplyMarker | null;
   /** F1/E1: marker ONLY. Never rendered_text, never the SharePayload. */
   draftedOpportunityMarker: DraftedOpportunityMarker | null;
+  /**
+   * M12e: the person said IN THIS MESSAGE that they were unwell.
+   *
+   * A boolean, because that is the whole of what the application knows and
+   * the whole of what it is willing to assert. It is set by a deterministic
+   * phrase rule over the person's own sentence
+   * (`core/wellbeing/self-report.ts`) — never by the model, never by a
+   * classifier, and never from tone. There is no severity field, no
+   * duration, no symptom and no trend, so there is nowhere for a clinical
+   * claim to be written even by accident.
+   */
+  selfReportedWellbeing: boolean;
 };
 
 export const EMPTY_MEMORY: MemorySections = {
@@ -78,6 +90,7 @@ export const EMPTY_MEMORY: MemorySections = {
   pendingClosure: null,
   awaitingFamilyReply: null,
   draftedOpportunityMarker: null,
+  selfReportedWellbeing: false,
 } as const;
 
 function hasMemory(memory: MemorySections): boolean {
@@ -87,7 +100,8 @@ function hasMemory(memory: MemorySections): boolean {
     memory.episodes.length > 0 ||
     memory.pendingClosure !== null ||
     memory.awaitingFamilyReply !== null ||
-    memory.draftedOpportunityMarker !== null
+    memory.draftedOpportunityMarker !== null ||
+    memory.selfReportedWellbeing
   );
 }
 
@@ -205,6 +219,63 @@ function renderMemory(memory: MemorySections): string {
       "and if a question is natural, ask ONE about what they told you. Do not",
       "list what you know about them, and do not mention anything above that",
       "they did not bring up.",
+    );
+  }
+
+  /**
+   * NOBODY THEY KNOW WAS NAMED — and that is a fact worth stating.
+   *
+   * Observed: "Don sent me a message today" got "Did you hear from John?".
+   * Don did not exist yet (extraction runs after the turn, so a name's first
+   * mention can never have a card), while John did and was sitting in the
+   * recently-active cards above. The model was handed a page about John and
+   * nothing about Don, and it wrote about John. The cards were background;
+   * with nothing else in view they read as an agenda.
+   *
+   * So the silence is made explicit. This is the mirror of the block above
+   * and is emitted only when there ARE cards, because with no cards there is
+   * nothing to be pulled towards.
+   */
+  if (memory.mentionedNow.length === 0 && memory.entityCards.length > 0) {
+    blocks.push(
+      "",
+      "They have NOT named anyone above in this message. Answer what they",
+      "actually said. Do not bring up anyone or anything from these notes",
+      "that they did not raise — not as a question, not as a change of",
+      "subject, not as a way to fill a pause. If they named somebody you",
+      "have no note about, that is ordinary: use the name they used, ask",
+      "about what they told you, and do not substitute a name you do know.",
+    );
+  }
+
+  /**
+   * THEY SAID THEY WERE UNWELL (M12e).
+   *
+   * The application has established the fact — deterministically, from their
+   * own words — and this tells the model what to DO with it, which is the
+   * smallest, most ordinary thing: say you are sorry, ask one gentle
+   * question, and stay there.
+   *
+   * Every line below the first is a boundary, because this is the topic on
+   * which a warm model is most likely to overreach: it must not name a
+   * condition, estimate severity, offer advice, or decide this is the moment
+   * to mention the daughter. The last of those is the observed failure and
+   * is also covered by the block above; it is repeated here because a
+   * wellbeing turn is exactly when a "helpful" pivot feels most natural.
+   */
+  if (memory.selfReportedWellbeing) {
+    blocks.push(
+      "",
+      "In this message they have said they were unwell or in pain. Say you",
+      "are sorry to hear it, in your own words, and ask ONE gentle question",
+      "about it — whether they are feeling better now, or what was bothering",
+      "them. Then stop and let them answer.",
+      "Stay on what they said. Do not name a condition, do not guess a",
+      "cause, do not judge how serious it is, do not give medical or",
+      "practical advice, and do not tell them what they must be feeling.",
+      "Do not change the subject to anyone in the notes above, and do not",
+      "offer to tell anybody — if that is appropriate, this application",
+      "asks, not you.",
     );
   }
 

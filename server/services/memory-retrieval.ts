@@ -36,7 +36,10 @@ export async function loadMemoryForTurn(
   input: { userId: string; text: string; now: Date },
 ): Promise<MemorySections> {
   const [entityRows, relationshipRows, userFacts] = await Promise.all([
-    deps.entities.listForUser(input.userId, 200),
+    // Cards and the "they just mentioned" spotlight are both shown to the
+    // person through the model, so a development-seeded row must not reach
+    // either (M12e.3).
+    deps.entities.listPresentableForUser(input.userId, 200),
     deps.relationships.listForUser(input.userId, 400),
     deps.facts.listForSubject(input.userId, null, memoryConfig.profileFactLimit),
   ]);
@@ -69,6 +72,8 @@ export async function loadMemoryForTurn(
     // Both family markers are decided in the turn, not by memory retrieval.
     awaitingFamilyReply: null,
     draftedOpportunityMarker: null,
+    // Set by the turn, from the person's own words — not by retrieval.
+    selfReportedWellbeing: false,
   };
 }
 

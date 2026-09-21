@@ -385,7 +385,11 @@ describe("5. the baseline comes from the real engine", () => {
 const DEV_ONLY_FILES = [
   "app/_actions/demo.ts",
   "app/_components/dev-tools.tsx",
-  "app/_components/dev-hint.tsx",
+  // M12e.3: the operator surface. It names the cast in prose (the canonical
+  // opening line) and gates itself with the same four conditions
+  // `/dev/family-inbox` uses. `dev-hint.tsx` is gone — its prose moved here
+  // when the hint was taken off the conversation page.
+  "app/dev/page.tsx",
 ];
 
 /** The PUBLIC demo's own files. Gated by CARELOOP_DEMO_MODE. */
@@ -525,19 +529,22 @@ describe("6. the demo names never reach production code", () => {
       // Each is either gated itself, or is a component whose server parent
       // decides - and that parent is checked below.
       const gated =
-        source.includes("isDebugSurfaceEnabled") ||
-        source.includes('"use client"') ||
-        file.endsWith("dev-hint.tsx");
+        source.includes("isDebugSurfaceEnabled") || source.includes('"use client"');
       expect(gated, file).toBe(true);
     }
     // The server-side one runs the real gate AND the four-condition check.
     const action = readFileSync("app/_actions/demo.ts", "utf8");
     expect(action).toContain("isDebugSurfaceEnabled(process.env)");
     expect(action).toContain("authorizeDevSeed(process.env");
-    // The page decides whether the client control is rendered at all.
+    // M12e.3: the OPERATOR PAGE decides whether the client control renders,
+    // and the conversation page renders no developer control at all.
+    const operator = readFileSync("app/dev/page.tsx", "utf8");
+    expect(operator).toContain("isDebugSurfaceEnabled(process.env)");
+    expect(operator).toContain("authorizeDevSeed(process.env");
+    expect(operator).toContain("isLocalOperatorHost");
+    expect(operator).toMatch(/<DemoResetControl/);
     const page = readFileSync("app/page.tsx", "utf8");
-    expect(page).toContain("isDebugSurfaceEnabled(process.env)");
-    expect(page).toMatch(/isDev \? <Dem/);
+    expect(page).not.toContain("DemoResetControl");
   });
 
   it("the prompt-example allowance is exactly one file, and it is a prompt", () => {
@@ -608,8 +615,7 @@ describe("7. every demo route is development-only", () => {
     // itself, or is a presentational component whose only caller is gated -
     // and the gated parent is named here so the pairing is explicit.
     const GATED_BY_PARENT: Record<string, string> = {
-      "app/_components/dev-tools.tsx": "app/page.tsx",
-      "app/_components/dev-hint.tsx": "app/page.tsx",
+      "app/_components/dev-tools.tsx": "app/dev/page.tsx",
       "app/_components/demo-start.tsx": "app/page.tsx",
     };
 

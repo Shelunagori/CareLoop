@@ -18,7 +18,14 @@ import {
  * the baseline statistics, the signal explanation, the observation, any
  * episode text, any identifier at all.
  */
-export type ShareTopic = "visit" | "call";
+/**
+ * `wellbeing` (M12e) is the third and deliberately different topic: it is
+ * not about an event between two people, it is a fact the person stated
+ * about themselves. Nothing about its handling is shared with the other two
+ * beyond the transport — in particular no model renders it (see
+ * `buildFallbackText` and `draftOpportunity`).
+ */
+export type ShareTopic = "visit" | "call" | "wellbeing";
 
 export type SharePayload = {
   /** The user's chosen label for themselves — "Dad" — not their account name. */
@@ -70,7 +77,7 @@ export const SharePayloadSchema = z
   .object({
     fromDisplayName: z.string().min(1),
     aboutEntityName: z.string().min(1).optional(),
-    topic: z.enum(["visit", "call"]),
+    topic: z.enum(["visit", "call", "wellbeing"]),
     timeframe: z.string().min(1).optional(),
     question: z.enum(CLOSED_RECONNECT_QUESTIONS),
     freeNote: z.string().min(1).optional(),

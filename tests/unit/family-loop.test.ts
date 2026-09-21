@@ -45,7 +45,7 @@ function seed(): M5Store {
         {
           id: JOHN, type: "person", subtype: null, displayName: "John",
           // Private content planted where the outbound path might reach it.
-          aliases: [SENTINEL], status: "active", lastMentionedAt: null,
+          aliases: [SENTINEL], status: "active", origin: "user" as const, lastMentionedAt: null,
         },
       ],
     }),
@@ -697,5 +697,138 @@ describe("6. the family request has a real expiry lifecycle", () => {
 
     expect(await requests.countOutstandingForUser(USER, oneSecondBefore)).toBe(1);
     expect(await requests.countOutstandingForUser(USER, WINDOW_END.toISOString())).toBe(0);
+  });
+});
+
+/**
+ * 15. THE WELLBEING SHARE USES THE SAME LOOP, END TO END (M12e).
+ *
+ * The argument for reusing the reconnect chain is that every guarantee this
+ * needs already lives in it. That is only an argument until somebody runs
+ * the third topic all the way through it, so this does: approve, send,
+ * open the capability page, answer with a bounded choice, and read the
+ * verified closure back inside CareLoop.
+ */
+describe("7. the wellbeing topic goes all the way round", () => {
+  const WELLBEING_TEXT =
+    "Dad said they were not feeling well. Would you be able to check in with them soon?";
+
+  function seedWellbeing(): M5Store {
+    const store = seed();
+    store.opportunities.length = 0;
+    store.opportunities.push({
+      id: "opp-w",
+      userId: USER,
+      signalId: "sig-w",
+      entityId: JOHN,
+      proposal: {
+        entityId: JOHN,
+        entityName: "John",
+        topic: "wellbeing",
+        observation: { kind: "self_reported_wellbeing", reportedOn: "2026-09-16" },
+        question: "ask_if_checking_in",
+      },
+      sharePayload: {
+        fromDisplayName: "Dad",
+        topic: "wellbeing" as const,
+        question: "ask_if_checking_in" as const,
+      },
+      renderedText: WELLBEING_TEXT,
+      renderedTextHash: sha256Hex(WELLBEING_TEXT),
+      status: "drafted",
+      offeredAt: null,
+      resolvedAt: null,
+      expiresAt: new Date(NOW.getTime() + 24 * HOUR).toISOString(),
+      createdAt: NOW.toISOString(),
+    });
+    return store;
+  }
+
+  it("approved bytes reach the family surface unchanged, and the reply closes the loop", async () => {
+    const store = seedWellbeing();
+    const d = m5Deps({ store, clock: fixedClock(NOW) });
+
+    // The person raised it themselves, so the sitting that carries their
+    // words is what supports presenting it.
+    const shown = await prepareOffer(d.consent, {
+      userId: USER,
+      conversationId: "conv-1",
+      recentMessages: [
+        {
+          role: "user",
+          content: "I was not feeling good today.",
+          createdAt: NOW.toISOString(),
+        },
+      ],
+    });
+    expect(shown.outcome).toBe("offered");
+    if (shown.outcome !== "offered") return;
+    expect(shown.renderedText).toBe(WELLBEING_TEXT);
+
+    const approved = await handleConsentReply(d.consent, {
+      userId: USER,
+      text: "yes please",
+      grantingMessageId: "msg-1",
+    });
+    expect(approved.outcome).toBe("approved");
+
+    await sendApprovedOpportunity(d.send, { userId: USER, opportunityId: "opp-w" });
+
+    // Sent once, and the bytes are the ones that were shown.
+    expect(store.delivered).toHaveLength(1);
+    expect(store.delivered[0].body).toBe(WELLBEING_TEXT);
+    expect(store.delivered[0].body).not.toContain(SENTINEL);
+
+    // The capability page serves those same bytes and the wellbeing choices.
+    const url = store.delivered[0].responseUrl;
+    const token = url.slice(url.lastIndexOf("/") + 1);
+    const view = await loadFamilyView(d.family, token);
+    expect(view.outcome).toBe("ok");
+    if (view.outcome !== "ok") return;
+    expect(view.message).toBe(WELLBEING_TEXT);
+    expect(view.choices.map((choice) => choice.id)).toEqual([
+      "yes_today",
+      "yes_soon",
+      "unsure",
+      "no",
+    ]);
+    // The reader is never invited to report on the older adult's health.
+    for (const choice of view.choices) {
+      expect(choice.label.toLowerCase()).not.toMatch(/how are|better|worse|unwell|pain|symptom/);
+    }
+
+    const reply = await recordFamilyReply(d.family, { token, choiceId: "yes_today" });
+    expect(reply.outcome).toBe("recorded");
+
+    // And CareLoop states the verified fact itself — the promise, not the health.
+    const closure = await loadPendingClosure(d.closure, { userId: USER });
+    expect(closure?.sentence).toBe("John replied that they are planning to check in today.");
+    await acknowledgeClosure(d.closure, {
+      closureId: closure!.closureId,
+      messageId: "msg-2",
+    });
+    expect(await loadPendingClosure(d.closure, { userId: USER })).toBeNull();
+  });
+
+  it("no model is called anywhere on this path", async () => {
+    const store = seedWellbeing();
+    const d = m5Deps({ store, clock: fixedClock(NOW) });
+    await prepareOffer(d.consent, {
+      userId: USER,
+      conversationId: "conv-1",
+      recentMessages: [
+        { role: "user", content: "I was not feeling good today.", createdAt: NOW.toISOString() },
+      ],
+    });
+    await handleConsentReply(d.consent, {
+      userId: USER,
+      text: "yes",
+      grantingMessageId: "msg-1",
+    });
+    await sendApprovedOpportunity(d.send, { userId: USER, opportunityId: "opp-w" });
+
+    // The draft was written by application code before any of this; sending
+    // is a byte copy, and nothing here renders, repairs or paraphrases.
+    expect(store.calls.filter((call) => call.includes("render"))).toEqual([]);
   });
 });

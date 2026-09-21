@@ -54,6 +54,14 @@ decline. "I haven't seen John" is an observable statement about a week;
 "George is lonely" is a claim about someone's inner life, and the system is
 built so that claim cannot be made.
 
+The same line holds for health. If somebody says they were not feeling well,
+CareLoop answers warmly, and may offer to pass **that sentence** on to one
+family member with their explicit approval. What it stores is that they said
+it — never a severity, a symptom, a cause or a trend, because none of the
+types involved has a field for one. It is not medically validated and is not
+an emergency service; language about immediate danger stands every proactive
+offer down rather than being routed through any of this.
+
 George, John and Simba are synthetic demo data — rows in a seeded fixture, not
 names any code branches on.
 
@@ -223,7 +231,12 @@ instruction to the prompt".
 |---|---|---|
 | **1** | Asked whether a family member had been in touch, the model produced a plausible reply that did not exist. | Waiting/reply state became application-owned: a delivered request with no response puts an explicit negative into the turn. |
 | **2** | After a genuine reply, the deterministic update was followed by contradictory generated language. | Verified closure turns became fully deterministic — the conversational model is not invoked. |
-| **3** | A wake-word prototype was not reliable enough for a dependable product experience. | Removed it and kept push-to-talk. Four general correctness fixes it surfaced were retained. |
+| **3** | A wake-word prototype was not reliable enough for a dependable product experience. | Removed it and kept push-to-talk. Four general correctness fixes it surfaced were retained. A later attempt — opt-in, with a server-decided expiry — earned its place and shipped as "Nora". |
+| **4** | After "How are you doing?" / "It was good, what about you?", a reconnect card appeared — and reappeared unchanged later in the same conversation. | Detection and presentation had been separated only halfway. One gate now asks whether the *current* turn still supports *this* opportunity; a refusal keeps the draft waiting and spends no cooldown. |
+| **5** | "Don sent me a message today" was answered with a question about John. | Extraction runs after the reply, so a first mention can never have a card — and the cards that did exist read as an agenda. The turn now states plainly when nobody in memory was named. |
+| **6** | "I was not feeling good today" got a shallow answer and a change of subject. | An explicit self-report is now an application-owned fact: a warm follow-up, and a consented offer to tell one family member the bare sentence. |
+| **7** | A reviewer's recording showed "Reset demo — development only" in the product chrome, and the built bundle still carried those words. | The development copy moved into server components; the one client module that needs interactivity now contains no words at all, and a test scans the built output. The controls then moved off the page entirely, to `/dev`. |
+| **8** | An entity reclassified to `origin = 'dev'` still rendered "RECONNECT WITH TESTPERSONA" on page load. | The rule had been added to one of nine reads of an entity's name, and the card a reviewer sees first comes from a different one. Provenance is now a single core rule, applied at every presentation boundary and filtered in SQL as well — because the opportunity was created while the entity was still classified `user`, so nothing stored on it could ever have revealed the change. |
 
 ## AI-assisted development workflow
 
@@ -288,6 +301,11 @@ detail.
 - Raw audio is transient only
 - Family receive only minimized, approved information
 - Verified external-world state is application-owned
+- A wellbeing note repeats what the person said, never an assessment of them
+- No model writes a wellbeing message — it is a fixed sentence
+- Nobody receives one unless exactly one family contact is configured
+- Urgent language stands every proactive offer down
+- Development-seeded people are never named to a person
 
 ## Repository layout
 
@@ -365,6 +383,9 @@ chooses.
 | M10 | Anonymous per-visitor public demo identity | Complete |
 | M11 | Production family email delivery (Brevo) | Complete |
 | Hardening | Cloudflare Workers AI migration; verified family-response grounding | Complete |
+| M12 | "Nora" opt-in wake word with a server-authoritative expiry; bounded per-turn endpointing | Live-accepted |
+| M12d | Memory-aware conversation, one bounded proactive opening, senior recovery and voice-state UX, conversation evals | Complete |
+| M12e | Contextual reconnect presentation, current-turn memory precedence, consented wellbeing share, entity provenance | Complete |
 
 ## What it does
 
@@ -489,22 +510,36 @@ follow. Reading replies aloud needs `ELEVENLABS_API_KEY` and
 declines, so the application boots, typed chat and transcription are untouched,
 and only `/api/voice/speak` answers `503`.
 
-**A hands-free wake word was built and removed.** M9 added "Nora", local wake
-detection and a persistent listening session; live acceptance proved the
-detection too unreliable to put in front of a person, and the session listening
-too unpredictable to reason about. It was deleted rather than left behind a
-flag — dormant code that still passes its tests is the kind nobody can explain
-a year later. Four general correctness fixes it surfaced were kept: the consent
-qualifier rule, the pinned transcription language, empty-transcript safety, and
-the distinction between "I didn't catch that" and "that recording failed".
+**A hands-free wake word was built, removed, and later earned back.** M9 added
+"Nora", local wake detection and a persistent listening session; live
+acceptance proved the detection too unreliable to put in front of a person,
+and the session listening too unpredictable to reason about. It was deleted
+rather than left behind a flag — dormant code that still passes its tests is
+the kind nobody can explain a year later. Four general correctness fixes it
+surfaced were kept: the consent qualifier rule, the pinned transcription
+language, empty-transcript safety, and the distinction between "I didn't catch
+that" and "that recording failed".
+
+M12 brought it back on different terms, and the terms are the point. Nora is
+**off by default**, it ends on a date the **server** decides rather than the
+browser, and there is no always-open session — a wake starts one bounded turn,
+which ends on silence, on a maximum duration, or on the Stop button. The
+arming state is derived from one value, so the interface cannot say
+"Listening" while the detector is paused, and the detector is never armed
+while CareLoop is speaking or while an unsent transcript is waiting.
+Push-to-talk remains the path that always works, and a build without a wake
+key simply has no Nora control.
 
 #### Voice scope and a production path
 
 What exists today is one path, and it is deliberately simple:
 
 ```
-push-to-talk  →  complete recording  →  transcription
-              →  transcript appears as editable composer text
+push-to-talk ─┐
+              ├→  complete recording  →  transcription
+"Hey Nora" ───┘        (bounded turn, ends on silence or a limit)
+              →  transcript appears as editable composer text,
+                 labelled as having come from speech
               →  explicit submission by the person
               →  the existing conversation pipeline
               →  optional ElevenLabs speech output
@@ -572,6 +607,21 @@ npm run db:start    # local Supabase (requires Docker)
 npm run db:reset    # re-apply all migrations
 npm run db:types    # regenerate server/db/types.generated.ts (never hand-edit)
 ```
+
+`entities.origin` (M12e) records whether a row was created by the extraction
+pipeline, the demo fixture or a development seeding route. Only the last is
+refused on the presentation path — "TestPersonA" is spelled exactly like a
+name, so no label rule could ever have told them apart. Existing rows were
+left as `user` rather than reclassified on a guess; the fixture stamps itself
+on the next `Reset demo`. The consequence, the cleanup and the exact apply
+procedure are in [`docs/12-dev-data-cleanup.md`](docs/12-dev-data-cleanup.md).
+
+The two M12e files are **re-runnable** — a guarded `create type` and
+`add column if not exists` — because they are applied by hand to a live
+project rather than by `db reset` to an empty one, and a half-applied file is
+a real outcome there. `tests/db/generated-types.test.ts` applies them to a
+real Postgres, applies them again, and asserts the result matches
+`server/db/types.generated.ts` value for value.
 
 Three RPCs carry the transitions that must be atomic: `materialize_signal`
 (M4), and `create_authorized_family_request` / `record_family_response` (M5).
@@ -656,7 +706,21 @@ exact `x-careloop-dev-secret` header match. Anything else returns a bare 404.
 | `/api/dev/seed-events` | POST | Replay the demo timeline through the production pipeline |
 | `/api/dev/detect` | POST | Run a detection sweep on demand |
 | `/api/dev/family-inbox` | GET | Read the dev notifier's outbox (stands in for real delivery) |
+| `/dev` | GET | **The operator surface.** Reset demo, the family inbox, a link to `/debug`, and the demo's opening line |
 | `/dev/family-inbox` | GET | The same outbox as an inbox, so the demo can show both sides of the loop |
+
+The CareLoop page itself carries **no developer control in any
+environment**, local development included (M12e.3). Gating them was correct
+and was not enough: the conversation surface is what a reviewer records, and
+a control marked "(dev)" is still in shot. They all moved to `/dev`, behind
+the same four conditions — no token, no query parameter, no new way in.
+
+Every entity these routes create is stamped `origin = 'dev'` and is therefore
+never named to a person. Rows they created **before** that column existed are
+classified `user`, because the migration refuses to guess at history — see
+[`docs/12-dev-data-cleanup.md`](docs/12-dev-data-cleanup.md) for the one-time
+manual cleanup, what `Reset demo` does and does not remove, and why there is
+no name pattern anywhere in the runtime code.
 | `/family/respond/[token]` | GET/POST | The family recipient page — bounded reply choices, no account needed |
 
 Those two family-inbox surfaces are the only ones that expose a plaintext

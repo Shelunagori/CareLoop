@@ -26,6 +26,38 @@ const USER = "user-1";
 const JOHN = "entity-john";
 const TEXT = "Hi John — are you and Simba visiting this weekend? Dad’s hoping so. ☕";
 const HASH = sha256Hex(TEXT);
+/**
+ * A VALID stored proposal (M12e).
+ *
+ * This fixture used to be `{ entityId, entityName }`, which
+ * `ReconnectProposalSchema` has always rejected — the tests passed because
+ * an unreadable proposal was treated as an explicit absence, and an explicit
+ * absence was exempt from every presentation rule. Both of those are now
+ * gone: an unreadable proposal gets the STRICTER treatment, so the fixture
+ * has to be a proposal the product could actually have stored.
+ */
+const PROPOSAL = {
+  entityId: JOHN,
+  entityName: "John",
+  eventType: "visit" as const,
+  observation: {
+    kind: "user_stated_absence" as const,
+    statedPhrase: "I haven't seen John this week",
+    window: { start: "2026-09-09T00:00:00.000Z", end: "2026-09-16T00:00:00.000Z" },
+  },
+  question: "ask_if_visiting" as const,
+};
+
+/**
+ * The conversational moment these tests run in: the person has just said
+ * something, now. Every offer here rests on the person's own words, so the
+ * sitting that carries them is part of the fixture, not decoration — an
+ * offer with no sitting to sit in is correctly withheld.
+ */
+const SITTING = [
+  { role: "user", content: "I haven't seen John this week.", createdAt: NOW.toISOString() },
+];
+
 const PAYLOAD = {
   fromDisplayName: "Dad",
   aboutEntityName: "Simba",
@@ -39,7 +71,7 @@ function storeWith(overrides: Partial<StoredOpportunity> = {}): M5Store {
       entities: [
         {
           id: JOHN, type: "person", subtype: null, displayName: "John",
-          aliases: [], status: "active", lastMentionedAt: null,
+          aliases: [], status: "active", origin: "user" as const, lastMentionedAt: null,
         },
       ],
     }),
@@ -49,7 +81,7 @@ function storeWith(overrides: Partial<StoredOpportunity> = {}): M5Store {
     userId: USER,
     signalId: "sig-1",
     entityId: JOHN,
-    proposal: { entityId: JOHN, entityName: "John" },
+    proposal: { ...PROPOSAL },
     sharePayload: { ...PAYLOAD },
     renderedText: TEXT,
     renderedTextHash: HASH,
@@ -73,7 +105,7 @@ beforeEach(() => {
 describe("1. the offer shows the stored bytes, exactly", () => {
   it("builds the frozen three-part block around the verbatim draft", async () => {
     const store = storeWith();
-    const result = await prepareOffer(deps(store).consent, { userId: USER, conversationId: "conv-1", recentMessages: [] });
+    const result = await prepareOffer(deps(store).consent, { userId: USER, conversationId: "conv-1", recentMessages: SITTING });
 
     expect(result.outcome).toBe("offered");
     if (result.outcome !== "offered") return;
@@ -92,8 +124,8 @@ describe("1. the offer shows the stored bytes, exactly", () => {
     const store = storeWith();
     const d = deps(store).consent;
     const [a, b] = await Promise.all([
-      prepareOffer(d, { userId: USER, conversationId: "conv-1", recentMessages: [] }),
-      prepareOffer(d, { userId: USER, conversationId: "conv-1", recentMessages: [] }),
+      prepareOffer(d, { userId: USER, conversationId: "conv-1", recentMessages: SITTING }),
+      prepareOffer(d, { userId: USER, conversationId: "conv-1", recentMessages: SITTING }),
     ]);
     const outcomes = [a.outcome, b.outcome].sort();
     // The loser says nothing: nobody has finished presenting it yet, so a
@@ -123,7 +155,12 @@ describe("1. the offer shows the stored bytes, exactly", () => {
     const result = await prepareOffer(deps(store).consent, {
       userId: USER,
       conversationId: "conv-1",
+      // The turn the dead stream was answering has to be in the window:
+      // re-presentation is bounded to the sitting the offer was made in
+      // (M12e), and an offer whose own moment has scrolled out of view is no
+      // longer a crash to recover from.
       recentMessages: [
+        ...SITTING,
         {
           role: "assistant",
           content: "Lovely weather today.",
@@ -140,7 +177,7 @@ describe("1. the offer shows the stored bytes, exactly", () => {
 
   it("expires rather than offering a stale draft", async () => {
     const store = storeWith({ expiresAt: NOW.toISOString() });
-    const result = await prepareOffer(deps(store).consent, { userId: USER, conversationId: "conv-1", recentMessages: [] });
+    const result = await prepareOffer(deps(store).consent, { userId: USER, conversationId: "conv-1", recentMessages: SITTING });
     expect(result.outcome).toBe("none");
     expect(store.opportunities[0].status).toBe("expired");
   });
@@ -150,7 +187,7 @@ describe("2. the answer", () => {
   async function offerThenReply(text: string, clock: Clock = fixedClock(NOW)) {
     const store = storeWith();
     const d = deps(store, clock).consent;
-    await prepareOffer(d, { userId: USER, conversationId: "conv-1", recentMessages: [] });
+    await prepareOffer(d, { userId: USER, conversationId: "conv-1", recentMessages: SITTING });
     const outcome = await handleConsentReply(d, {
       userId: USER,
       text,
@@ -212,7 +249,7 @@ describe("2. the answer", () => {
   it("refuses to approve a stale offer", async () => {
     const store = storeWith();
     const d = deps(store).consent;
-    await prepareOffer(d, { userId: USER, conversationId: "conv-1", recentMessages: [] });
+    await prepareOffer(d, { userId: USER, conversationId: "conv-1", recentMessages: SITTING });
 
     const later = fixedClock(new Date(NOW.getTime() + 25 * HOUR));
     const outcome = await handleConsentReply(deps(store, later).consent, {
@@ -239,7 +276,7 @@ describe("3. a duplicated yes produces one grant, not two", () => {
   it("is idempotent under a race", async () => {
     const store = storeWith();
     const d = deps(store).consent;
-    await prepareOffer(d, { userId: USER, conversationId: "conv-1", recentMessages: [] });
+    await prepareOffer(d, { userId: USER, conversationId: "conv-1", recentMessages: SITTING });
 
     const [a, b] = await Promise.all([
       handleConsentReply(d, { userId: USER, text: "yes", grantingMessageId: "m1" }),
@@ -256,7 +293,7 @@ describe("3. a duplicated yes produces one grant, not two", () => {
   it("a second yes after approval finds no offer to answer", async () => {
     const store = storeWith();
     const d = deps(store).consent;
-    await prepareOffer(d, { userId: USER, conversationId: "conv-1", recentMessages: [] });
+    await prepareOffer(d, { userId: USER, conversationId: "conv-1", recentMessages: SITTING });
     await handleConsentReply(d, { userId: USER, text: "yes", grantingMessageId: "m1" });
 
     const again = await handleConsentReply(d, {

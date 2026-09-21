@@ -126,7 +126,7 @@ CareLoop  →  authorized family request  →  Brevo transactional email
 
 ## C. The script
 
-> The chat page carries **Reset demo** and **Open family inbox** controls in
+> The chat page carries **Reset demo** and **Family inbox (dev)** controls in
 > development, grouped as operator controls and labelled as such. Reset runs
 > the same reset, seed and blank-conversation steps as the command above
 > through a server action — the secret never reaches the browser — and it also
@@ -334,7 +334,7 @@ If `ELEVENLABS_API_KEY` and `ELEVENLABS_VOICE_ID` are absent, speaking to
 CareLoop still works; only reading aloud is unavailable, and the speaker
 control says so rather than failing.
 
-## D3. Why there is no wake word
+## D3. The wake word: removed, then earned back
 
 If the question comes up — and with an older-adult product it does — the
 answer is a decision, not a gap.
@@ -357,10 +357,30 @@ flip is not a demo.
 > for a spoken 'yes', empty transcripts being submitted as messages, and an
 > unusable recording being reported to the person as a mishearing."*
 
+**And then it came back, on different terms.** M12 rebuilt it as "Nora", and
+the terms are the interesting part rather than the detection. It is **off by
+default**. It ends on a date the **server** decides, not the browser, so a
+demo cannot quietly outlive the licence it runs on. There is **no open
+session**: a wake starts one bounded turn that finishes on silence, on a
+maximum duration, or on the Stop button — which is a per-turn endpointer and
+is deliberately not called a production-grade VAD. The arming state is
+derived from the same value the interface displays, so it cannot say
+"Listening" while the detector is paused, and the detector is never armed
+while CareLoop is speaking or while an unsent transcript is waiting.
+
+What did not change is the thing that matters: **push-to-talk is still the
+path that always works**, the transcript is still shown and editable before
+anything is sent, and Send is still explicit. A build with no wake key has no
+Nora control at all.
+
+> *"The first attempt was deleted because it was unreliable. The second was
+> kept because it is bounded — and the bound is enforced by the server, not
+> by a promise in the README."*
+
 **Honest limitation.** A browser page is not an always-on appliance either
-way: browsers throttle background tabs and suspend sleeping devices. Voice
-input here is a press, and the architecture — a `SpeechToTextProvider` port —
-is what a native or hardware client would keep.
+way: browsers throttle background tabs and suspend sleeping devices. Nora is
+a wake phrase inside an open tab, not an appliance, and the architecture — a
+`SpeechToTextProvider` port — is what a native or hardware client would keep.
 
 ## E. What the demo does *not* claim
 
@@ -370,8 +390,15 @@ only evidence in play is:
 
 - *George said he has not seen John this week.*
 - *His recorded visit cadence with John changed.*
+- *George said he was not feeling well today.*
 
-Both are observable. Neither is a diagnosis.
+All three are observable, and the third is observable for exactly the same
+reason as the first: he said it. CareLoop may offer to pass that sentence on
+to one family member, with his explicit approval and in bytes he has read.
+What it never does is decide how unwell he is, why, or whether it is getting
+worse — and there is no field in the stored claim in which such a decision
+could be written. None of this is a diagnosis, and none of it is an
+emergency service.
 
 ---
 

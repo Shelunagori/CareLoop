@@ -35,6 +35,7 @@ const ENTITY_ROW = {
   displayName: "X",
   aliases: [] as string[],
   status: "active" as const,
+  origin: "user" as const,
   lastMentionedAt: null,
 };
 
@@ -482,7 +483,7 @@ describe("sweep accounting: no candidate ever disappears", () => {
 
   const entityRow = (id: string) => ({
     id, type: "person" as const, subtype: null, displayName: id,
-    aliases: [] as string[], status: "active" as const, lastMentionedAt: null,
+    aliases: [] as string[], status: "active" as const, origin: "user" as const, lastMentionedAt: null,
   });
 
   const activeBaseline = (entityId: string) => ({

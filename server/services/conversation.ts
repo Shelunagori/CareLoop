@@ -14,6 +14,8 @@ import type { OpportunitiesRepo } from "@/server/repositories/opportunities";
 import type { EntitiesRepo } from "@/server/repositories/entities";
 import type { ProfilesRepo } from "@/server/repositories/profiles";
 import { buildOfferBlock } from "@/core/share/offer";
+import { presentableName } from "@/core/memory/provenance";
+import { readWellbeing } from "@/core/wellbeing/self-report";
 import {
   mayStillBecomeOutreach,
   offersOutreach,
@@ -49,7 +51,7 @@ export type ConversationDataDeps = {
    * existing test can construct this type without them.
    */
   opportunities?: Pick<OpportunitiesRepo, "listOpenForUser">;
-  entities?: Pick<EntitiesRepo, "listForUser">;
+  entities?: Pick<EntitiesRepo, "listPresentableForUser">;
   profiles?: ProfilesRepo;
 };
 
@@ -108,7 +110,7 @@ export type ConversationDeps = ConversationDataDeps & {
    * what happened (M8 regression 1). The type is what stops it recurring.
    */
   opportunities: Pick<OpportunitiesRepo, "listOpenForUser">;
-  entities: Pick<EntitiesRepo, "listForUser">;
+  entities: Pick<EntitiesRepo, "listPresentableForUser">;
 };
 
 export type TurnInput = {
@@ -254,6 +256,28 @@ export async function handleTurn(
     if (closed) return closed;
   }
 
+  /**
+   * 3c. WHAT THEY SAID ABOUT THEMSELVES (M12e).
+   *
+   * Deterministic, from their own sentence, before anything else looks at
+   * this turn. Two entirely separate consequences, and neither is a
+   * diagnosis:
+   *
+   *   `self_report` tells the model to answer it properly — say you are
+   *   sorry, ask one gentle question, stay there (see renderMemory). The
+   *   OFFER to pass it on is prepared after the reply, by
+   *   `noteWellbeingSelfReport`, and shown by `prepareOffer` on a later
+   *   turn like any other.
+   *
+   *   `urgent` stands every proactive path down. "Shall I let John know?"
+   *   is a grotesque answer to somebody saying they cannot breathe, and the
+   *   reconnect card is no better. What the model is told to do instead is
+   *   unchanged from v1 of the prompt and is not a triage system: say
+   *   plainly that CareLoop cannot help with this, and that they should
+   *   speak to someone who can.
+   */
+  const wellbeing = readWellbeing(input.text);
+
   // 4. Bounded recent turns. This query already includes the message persisted
   //    in step 2 — it is the newest row — so it is NOT appended again.
   const recentTurns = await deps.messages.listRecent(
@@ -287,11 +311,14 @@ export async function handleTurn(
     // reaching this line PROVES there is none. The awaiting state is the only
     // family fact a generated turn can carry.
     awaiting = await deps.consent.loadAwaitingReply({ userId: input.userId });
-    offer = await deps.consent.prepareOffer({
-      userId: input.userId,
-      conversationId: conversation.id,
-      recentMessages: recentTurns,
-    });
+    offer =
+      wellbeing.kind === "urgent"
+        ? null
+        : await deps.consent.prepareOffer({
+            userId: input.userId,
+            conversationId: conversation.id,
+            recentMessages: recentTurns,
+          });
   }
   const presenting = offer && (offer.outcome === "offered" || offer.outcome === "represented")
     ? offer
@@ -302,6 +329,7 @@ export async function handleTurn(
     recentTurns,
     memory: {
       ...memory,
+      selfReportedWellbeing: wellbeing.kind === "self_report",
       // Always null on a generated turn: step 3b returned if a closure
       // existed, so the model is never handed one to talk about.
       pendingClosure: null,
@@ -746,7 +774,14 @@ async function loadDisplayName(
 }
 
 export async function loadPendingOffer(
-  deps: ConversationDataDeps,
+  /**
+   * Narrower than `ConversationDataDeps` on purpose (M12e.3): this reads
+   * two things, and a signature that says so is a signature a test can
+   * satisfy honestly — including with a repository that deliberately does
+   * NOT filter, which is how the code-level provenance rule gets tested
+   * with the SQL one taken away.
+   */
+  deps: Pick<ConversationDataDeps, "opportunities" | "entities">,
   userId: string,
 ): Promise<PendingOffer | null> {
   if (!deps.opportunities || !deps.entities) return null;
@@ -766,8 +801,26 @@ export async function loadPendingOffer(
     open.find((row) => row.status === "offered") ?? open.find((row) => row.status === "approved");
   if (!current || current.renderedText === null) return null;
 
-  const entities = await deps.entities.listForUser(userId, chatConfig.pendingOfferScanLimit);
-  const entityName = entities.find((row) => row.id === current.entityId)?.displayName;
+  /**
+   * THE CARD ON PAGE LOAD (M12e.3).
+   *
+   * This read is why "RECONNECT WITH TESTPERSONA" survived the provenance
+   * migration. `prepareOffer` gained the rule; this did not, and this is the
+   * one a reviewer hits first — it renders from an ALREADY-`offered`
+   * opportunity, created while the entity was still classified `user`, so
+   * nothing about the opportunity or its stored proposal was ever going to
+   * reveal what the entity has since become. Provenance has to be re-read at
+   * the boundary, every time, from the entity itself.
+   *
+   * Two gates, both from the same place as everywhere else: the repository
+   * excludes `dev` in SQL, and `presentableEntity` refuses it again in code
+   * and checks the label is fit to render.
+   */
+  const entities = await deps.entities.listPresentableForUser(
+    userId,
+    chatConfig.pendingOfferScanLimit,
+  );
+  const entityName = presentableName(entities.find((row) => row.id === current.entityId));
   if (!entityName) return null;
 
   return {

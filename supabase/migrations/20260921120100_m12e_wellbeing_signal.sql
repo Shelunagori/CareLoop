@@ -1,0 +1,21 @@
+-- M12e: an explicit wellbeing self-report is a third kind of signal.
+--
+-- WHAT IT MEANS, exactly and only: the person SAID they were unwell, in
+-- their own words, in this conversation. It is not "the model thinks they
+-- seem unwell", not a severity, not a diagnosis, and not a trend. The
+-- detector is a deterministic phrase rule over the person's own sentence
+-- (core/wellbeing/self-report.ts); no model classifies anything, and there
+-- is nowhere in the stored explanation to put a clinical claim.
+--
+-- WHY IT IS A SIGNAL AT ALL, rather than a new parallel mechanism. The
+-- share the person may be offered has to carry the same guarantees the
+-- reconnect share already carries: exact bytes shown, exact bytes approved,
+-- a consent snapshot copied rather than rebuilt, a capability-token family
+-- request, a bounded reply and a verified closure. Every one of those hangs
+-- off reconnect_opportunities, which hangs off signals. Reusing the chain is
+-- what makes those guarantees apply to this by construction; a second chain
+-- would mean a second implementation of consent.
+--
+-- The enum value is added alone, and used by no statement in this file, so
+-- it is committed before any later migration or runtime code references it.
+alter type public.signal_type add value if not exists 'self_reported_wellbeing';

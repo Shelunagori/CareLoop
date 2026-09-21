@@ -77,7 +77,7 @@ function storeWith(overrides: Partial<StoredOpportunity> = {}): M5Store {
       entities: [
         {
           id: JOHN, type: "person", subtype: null, displayName: "John",
-          aliases: [], status: "active", lastMentionedAt: null,
+          aliases: [], status: "active", origin: "user" as const, lastMentionedAt: null,
         },
       ],
     }),

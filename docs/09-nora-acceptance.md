@@ -123,6 +123,98 @@ microphone is closed.
 **Read slower**, send a message and listen: slower, same pitch, same words.
 Reload — the preference survives.
 
+## A3. Corrective pass (M12e)
+
+Run before §A. Every step is a real browser with a real microphone and a
+real database; none of it is provable statically, which is why it is here.
+
+### A — a reconnect card must be contextual
+
+Start a **fresh sitting** (nothing said for thirty minutes, or reload after a
+gap). Then:
+
+```
+How are you doing?
+It was good, what about you?
+```
+
+Expected: **no reconnect card**, whatever is drafted and waiting. If one
+appears, capture the `consent.offer_withheld` / `consent.offered` log lines —
+they carry the reason, the turn count and the character count.
+
+Then, in the same sitting:
+
+```
+I haven't seen Don recently.
+```
+
+Expected: Don is resolved or created as an ordinary entity, the follow-up is
+about **Don**, and no card mentions John. A reconnect card for Don may appear
+now or on a later turn in this sitting; it must never name somebody the
+person did not raise.
+
+Carry on talking for another dozen turns. Expected: the same card does **not**
+reappear unchanged.
+
+### B — a new name is a person, not a prompt for an old one
+
+```
+Don sent me a message today.
+```
+
+Expected: the reply is about Don and the message — "Oh, what did Don say?" is
+the shape. It must not ask about John, Simba or anyone else in memory, and it
+must not invent a relationship ("your son Don"). Say something about Don again
+on a later turn and check the existing promotion rules behave: a relationship
+is recorded only once the person states one.
+
+### C — a wellbeing self-report
+
+```
+I wasn't feeling good today.
+```
+
+Expected: a warm acknowledgement and **one** gentle follow-up, on that
+subject. No condition named, no advice, no severity, and **no switch to a
+remembered family member**.
+
+If exactly one family contact is configured, a share may be offered on this
+turn or the next. Expected wording is a question, and the draft is shown in
+full before anything happens. Answer **no** first: nothing is sent, and the
+conversation carries on. Then repeat and answer **yes**, and follow the
+message all the way to the family side — §A1's family steps apply unchanged.
+The bytes the family member reads must be the bytes that were shown.
+
+Also try, in a throwaway session: `I have chest pain and I can't breathe.`
+Expected: no card, no share offer, no draft — CareLoop says plainly that it
+cannot help with this and that they should speak to someone who can.
+
+### D — voice origin is visible
+
+```
+Hey Nora  →  speak one sentence  →  wait for the silence timeout
+```
+
+Expected: the transcript lands in the composer with a **"Voice transcript"**
+line above it, no key was pressed to produce it, and **Send** is still
+required. Edit a word: the line stays. Clear the box: the line goes. Type a
+message from scratch: the line never appears.
+
+### E — a clean reviewer screen
+
+Expected on `/` **in local development as well as in a production build**,
+with DevTools closed: no **Reset demo**, no **development only**, no
+**Family inbox (dev)**, no "Try saying…", no internal identifiers anywhere
+on screen, and — signed out — no mention of any environment variable or
+config file. A development-seeded entity must not appear on a card even if
+it has an open, already-offered opportunity.
+
+Then open `/dev`. Expected: **Reset demo** and **Family inbox (dev)** are
+both there. Click Reset demo and read the pending label: **Resetting…**,
+with a real ellipsis, never `Resetting\u2026`. Afterwards George, John and
+Simba are back as `demo` entities and anything `dev` is still invisible on
+`/`.
+
 ## A. Wake reliability — 20 intended attempts
 
 Normal speaking voice, normal room, one device. Say "Nora", wait for

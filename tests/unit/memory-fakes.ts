@@ -147,6 +147,10 @@ export function fakeMemoryRepos(store: MemoryStore) {
   };
 
   const entities: EntitiesRepo = {
+    async listPresentableForUser(userId: string, limit: number) {
+      const all = await this.listForUser(userId, limit);
+      return all.filter((row) => row.origin !== "dev");
+    },
     async listForUser() {
       return [...store.entities];
     },
@@ -164,6 +168,7 @@ export function fakeMemoryRepos(store: MemoryStore) {
         displayName: input.displayName,
         aliases: [],
         status: "active",
+        origin: "user" as const,
         lastMentionedAt: null,
       };
       store.entities.push(record);
@@ -334,6 +339,20 @@ export function fakeMemoryRepos(store: MemoryStore) {
   };
 
   const interactionEvents: InteractionEventsRepo = {
+    async latestPositiveSince({ entityId, sinceOccurredIso }) {
+      // The ingestion store keeps INPUTs, which carry no id; the id plays no
+      // part in the supersession question, so one is synthesised rather than
+      // widening the store for a field nothing reads.
+      const hit = store.interactionEvents
+        .filter(
+          (e) =>
+            e.entityId === entityId &&
+            e.polarity === "positive" &&
+            e.occurredAt >= sinceOccurredIso,
+        )
+        .sort((a, b) => b.reportedAt.localeCompare(a.reportedAt))[0];
+      return hit ? { id: hit.ingestFingerprint, ...hit } : null;
+    },
     async listRecentPositive() {
       // Not a concern here: the proactive opening is tested on its own.
       return [];

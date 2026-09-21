@@ -138,9 +138,9 @@ function absenceWithObservation(expression: string, entityId = JOHN) {
 function baseStore(overrides: Partial<ReconnectStore> = {}): ReconnectStore {
   return createStore({
     entities: [
-      { id: JOHN, type: "person", subtype: null, displayName: "John", aliases: [], status: "active", lastMentionedAt: null },
-      { id: SIMBA, type: "pet", subtype: "dog", displayName: "Simba", aliases: [], status: "active", lastMentionedAt: null },
-      { id: MARY, type: "person", subtype: null, displayName: "Mary", aliases: [], status: "active", lastMentionedAt: null },
+      { id: JOHN, type: "person", subtype: null, displayName: "John", aliases: [], status: "active", origin: "user" as const, lastMentionedAt: null },
+      { id: SIMBA, type: "pet", subtype: "dog", displayName: "Simba", aliases: [], status: "active", origin: "user" as const, lastMentionedAt: null },
+      { id: MARY, type: "person", subtype: null, displayName: "Mary", aliases: [], status: "active", origin: "user" as const, lastMentionedAt: null },
     ],
     relationships: [
       {
@@ -1057,7 +1057,7 @@ describe("5f. no candidate leaves the sweep unaccounted for", () => {
     });
     store.entities.push({
       id: KATE, type: "person", subtype: null, displayName: "Kate",
-      aliases: [], status: "active", lastMentionedAt: null,
+      aliases: [], status: "active", origin: "user" as const, lastMentionedAt: null,
     });
     return store;
   }
@@ -1115,7 +1115,7 @@ describe("5f. no candidate leaves the sweep unaccounted for", () => {
     const ELI = "entity-eli";
     store.entities.push({
       id: ELI, type: "person", subtype: null, displayName: "Eli",
-      aliases: [], status: "active", lastMentionedAt: null,
+      aliases: [], status: "active", origin: "user" as const, lastMentionedAt: null,
     });
     store.interactionEvents.push(...weekly(13, ELI));
     store.baselines.set(`${ELI}:visit`, activeBaseline(ELI));
@@ -1162,7 +1162,7 @@ describe("5f. no candidate leaves the sweep unaccounted for", () => {
     for (const extra of ["entity-eli", "entity-zoe"]) {
       store.entities.push({
         id: extra, type: "person", subtype: null, displayName: extra,
-        aliases: [], status: "active", lastMentionedAt: null,
+        aliases: [], status: "active", origin: "user" as const, lastMentionedAt: null,
       });
       store.interactionEvents.push(...weekly(13, extra));
       store.baselines.set(`${extra}:visit`, activeBaseline(extra));
@@ -1197,7 +1197,7 @@ describe("5f. no candidate leaves the sweep unaccounted for", () => {
     for (const extra of ["entity-eli"]) {
       store.entities.push({
         id: extra, type: "person", subtype: null, displayName: extra,
-        aliases: [], status: "active", lastMentionedAt: null,
+        aliases: [], status: "active", origin: "user" as const, lastMentionedAt: null,
       });
       store.interactionEvents.push(...weekly(13, extra));
       store.baselines.set(`${extra}:visit`, activeBaseline(extra));
@@ -1324,7 +1324,7 @@ describe("5g. cadence is never starved by absence", () => {
     });
     store.entities.push({
       id: KATE, type: "person", subtype: null, displayName: "Kate",
-      aliases: [], status: "active", lastMentionedAt: null,
+      aliases: [], status: "active", origin: "user" as const, lastMentionedAt: null,
     });
 
     const absenceKey = absenceDetectionKey("abs-john");
@@ -1401,7 +1401,7 @@ describe("5g. cadence is never starved by absence", () => {
     });
     store.entities.push({
       id: KATE, type: "person", subtype: null, displayName: "Kate",
-      aliases: [], status: "active", lastMentionedAt: null,
+      aliases: [], status: "active", origin: "user" as const, lastMentionedAt: null,
     });
     const cadenceKey = cadenceDetectionKey({
       entityId: MARY, eventType: "visit",
@@ -1785,5 +1785,66 @@ describe("8. the family renderer receives the payload and nothing else", () => {
     );
     expect(render.calls[0].messages).toHaveLength(2);
     expect(render.calls[0].promptRef).toBe("family-render.v2");
+  });
+});
+
+/**
+ * HIDING SOMETHING MUST NOT COST THE PERSON ANYTHING (M12e.3).
+ *
+ * `maxOffersPerWeek` is a global cap: three offers across the whole
+ * account. An opportunity belonging to a development-seeded entity is never
+ * shown to anyone, so if it consumed one of those three, a test row would
+ * quietly suppress a real family nudge — a cooldown spent for a card nobody
+ * saw. Only the account-wide tallies are filtered; a dev entity's own
+ * cooldowns are left alone, because they constrain an entity that is
+ * invisible either way.
+ */
+describe("14. an invisible offer spends no visible pacing", () => {
+  const DEV_ENTITY = "entity-dev";
+
+  function storeWithDevOffers(offers: number): ReconnectStore {
+    const store = baseStore();
+    store.entities.push({
+      id: DEV_ENTITY, type: "person", subtype: null, displayName: "TestPersonA",
+      aliases: [], status: "active", origin: "dev", lastMentionedAt: null,
+    });
+    store.interactionEvents.push(absenceEvent());
+
+    for (let i = 0; i < offers; i += 1) {
+      store.signals.push({
+        id: `dev-sig-${i}`, userId: USER, entityId: DEV_ENTITY, baselineId: null,
+        signalType: "user_asserted_absence", status: "materialized",
+        explanation: {}, detectedAt: iso(1), suppressionReason: null,
+        materializedAt: iso(1),
+      });
+      store.opportunities.push({
+        id: `dev-opp-${i}`, userId: USER, signalId: `dev-sig-${i}`, entityId: DEV_ENTITY,
+        proposal: {}, sharePayload: {}, renderedText: "x", renderedTextHash: "h",
+        // Consumed, so `open_opportunity_exists` is not what is being tested.
+        status: "consumed", offeredAt: iso(1), resolvedAt: iso(1),
+        expiresAt: iso(-1), createdAt: iso(1),
+      });
+    }
+    return store;
+  }
+
+  it("three hidden offers this week do not use up the account's three", async () => {
+    const { deps } = harness({ store: storeWithDevOffers(3) });
+    const result = await runDetectionSweep(deps, { userId: USER, conversationId: "conv-1" });
+
+    const john = result.signals.find((signal) => signal.entityId === JOHN);
+    expect(john?.suppressionReason).toBeUndefined();
+    expect(john?.outcome).toBe("materialized");
+  });
+
+  it("but three VISIBLE offers still do — the cap is real", async () => {
+    const store = storeWithDevOffers(3);
+    // Same rows, reclassified. Nothing else changes.
+    store.entities[store.entities.length - 1].origin = "user";
+    const { deps } = harness({ store });
+    const result = await runDetectionSweep(deps, { userId: USER, conversationId: "conv-1" });
+
+    const john = result.signals.find((signal) => signal.entityId === JOHN);
+    expect(john?.suppressionReason).toBe("weekly_offer_cap");
   });
 });

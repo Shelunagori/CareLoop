@@ -16,6 +16,21 @@ import type { SharePayload } from "./payload";
 export function buildFallbackText(payload: SharePayload): string {
   const from = payload.fromDisplayName;
 
+  /**
+   * WELLBEING IS ALWAYS THIS TEXT (M12e) — it is not a fallback here, it is
+   * the only renderer. `draftOpportunity` never calls the model for a
+   * wellbeing topic, so this sentence is what is shown, what is approved and
+   * what is sent.
+   *
+   * Read what it does NOT contain: no symptom, no severity, no duration, no
+   * day, no phrase of theirs, no guess at a cause and no instruction. It
+   * reports that the person said something and asks one closed question. The
+   * family member learns exactly what the older adult approved them learning.
+   */
+  if (payload.question === "ask_if_checking_in" || payload.topic === "wellbeing") {
+    return `${from} said they were not feeling well. Would you be able to check in with them soon?`;
+  }
+
   if (payload.question === "ask_if_calling") {
     return `${from} was wondering — could you give them a call soon?`;
   }
@@ -33,6 +48,9 @@ export function buildFallbackText(payload: SharePayload): string {
  * system that has nowhere left to fall back to.
  */
 export function lastResortText(question: ClosedReconnectQuestion): string {
+  if (question === "ask_if_checking_in") {
+    return "A message from your family — would you be able to check in with them soon?";
+  }
   return question === "ask_if_calling"
     ? "A message from your family — could you give them a call soon?"
     : "A message from your family — are you able to visit soon?";

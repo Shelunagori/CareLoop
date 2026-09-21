@@ -73,7 +73,7 @@ export default async function FamilyInboxPage() {
       <header className="pb-5">
         <h1 className="text-[1.45rem] font-semibold tracking-tight">Family inbox</h1>
         <p className="text-[0.95rem] text-[var(--color-muted)]">
-          Demo only — this stands in for a text message.
+          Development only. This is where the family email is delivered when CareLoop is run locally — same bytes, same capability link, no provider.
         </p>
       </header>
 

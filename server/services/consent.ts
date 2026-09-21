@@ -1,5 +1,6 @@
 import type { Clock } from "@/server/adapters/clock";
 import type { EntitiesRepo } from "@/server/repositories/entities";
+import type { InteractionEventsRepo } from "@/server/repositories/interaction-events";
 import type {
   ConsentGrantsRepo,
   ConsentGrantRecord,
@@ -14,11 +15,13 @@ import {
   needsRepresenting,
   type TranscriptMessage,
 } from "@/core/share/offer";
+import { buildWellbeingPreamble } from "@/core/wellbeing/offer";
 import { ReconnectProposalSchema, type ReconnectProposal } from "@/core/detection/proposal";
 import { detectionConfig, type DetectionConfig } from "@/core/detection/config";
-import { cadenceMayBePresented } from "@/core/detection/presentation";
+import { currentSitting, mayPresentOpportunity } from "@/core/detection/presentation";
 import { SharePayloadSchema, type SharePayload } from "@/core/share/payload";
-import { sanitizeLabel } from "@/core/share/minimize";
+import { presentableEntity } from "@/core/memory/provenance";
+import { absenceIsSuperseded } from "@/core/detection/absence";
 import { readConsent, type ConsentReading } from "@/core/consent/decision";
 import { buildConsentScope, consentExpiresAt } from "@/core/consent/grant";
 import { checkApprovalPreconditions } from "@/core/consent/validation";
@@ -41,6 +44,15 @@ export type ConsentDeps = {
   opportunities: OpportunitiesRepo;
   consentGrants: ConsentGrantsRepo;
   entities: EntitiesRepo;
+  /**
+   * One bounded read, and only for an absence candidate (M12e.1): has the
+   * person since reported contact with this entity, about the period they
+   * said there was none? The detector already refuses to MINT a superseded
+   * absence; this refuses to PRESENT one that was minted before the contact
+   * was reported, which is the ordinary case — ingestion runs after the
+   * turn, so the contradicting event lands one turn later.
+   */
+  interactionEvents: Pick<InteractionEventsRepo, "latestPositiveSince">;
   /** Overridable so a pacing threshold is testable by passing a number. */
   detection?: DetectionConfig;
 };
@@ -77,13 +89,33 @@ function logEvent(record: Record<string, unknown>): void {
  * rule is a character class, and it would refuse "user_42" and
  * "550e8400-e29b" for exactly the same reason.
  */
-async function entityNameFor(
+export type PresentableEntity = {
+  displayName: string;
+  /** Stored alternative labels, sanitized the same way. */
+  aliases: readonly string[];
+};
+
+async function entityLabelFor(
   deps: ConsentDeps,
   input: { userId: string; entityId: string },
-): Promise<string | null> {
-  const entities = await deps.entities.listForUser(input.userId, ENTITY_SCAN_LIMIT);
-  const stored = entities.find((entity) => entity.id === input.entityId)?.displayName ?? null;
-  return sanitizeLabel(stored);
+): Promise<PresentableEntity | null> {
+  const entities = await deps.entities.listPresentableForUser(input.userId, ENTITY_SCAN_LIMIT);
+  /**
+   * PROVENANCE, NOT SPELLING — and decided in ONE place (M12e.3).
+   *
+   * `sanitizeLabel` refused "M4ABSENCE1789574558" because it contains
+   * digits. It cannot refuse "TestPersonA", which is letters all the way
+   * through and indistinguishable from a name somebody actually has. The
+   * problem was never the characters; it is that the row was created by a
+   * development seeding route rather than by the person talking.
+   *
+   * M12e put that rule here and nowhere else, which is how a reviewer still
+   * saw "RECONNECT WITH TESTPERSONA": the card drawn on page load comes
+   * from `loadPendingOffer`, not from this function. The rule now lives in
+   * `core/memory/provenance.ts` and every presentation path calls it — and
+   * the read above excludes `dev` in SQL before it gets here.
+   */
+  return presentableEntity(entities.find((entity) => entity.id === input.entityId));
 }
 
 function readPayload(value: unknown): SharePayload | null {
@@ -164,6 +196,13 @@ export async function prepareOffer(
   );
 
 
+  /**
+   * Measured ONCE for the whole loop: every candidate is judged against the
+   * same conversational moment, and a sitting cannot shift between two
+   * candidates of one turn.
+   */
+  const sitting = currentSitting(input.recentMessages, config);
+
   for (const opportunity of candidates) {
     if (Date.parse(opportunity.expiresAt) <= now.getTime()) {
       // Expiry is evaluated on read, never swept. An expired opportunity is
@@ -178,11 +217,11 @@ export async function prepareOffer(
     }
     if (opportunity.renderedText === null) continue;
 
-    const entityName = await entityNameFor(deps, {
+    const entity = await entityLabelFor(deps, {
       userId: input.userId,
       entityId: opportunity.entityId,
     });
-    if (entityName === null) {
+    if (entity === null) {
       // Either the entity is gone, or its stored label is not something to
       // put in front of a person. Both are "say nothing", and both are
       // worth a log line: silence with no explanation is how a suppressed
@@ -191,20 +230,32 @@ export async function prepareOffer(
         event: "consent.offer_withheld",
         opportunityId: opportunity.id,
         entityId: opportunity.entityId,
-        reason: "unpresentable_entity_label",
+        reason: "unpresentable_entity",
       });
       continue;
     }
 
     /**
      * The stored proposal decides two things, and the model neither of them:
-     * whether this offer is the application's own observation (cadence) or
-     * the person's own statement (absence), and — if the former — the exact
-     * sentence explaining it.
+     * WHICH KIND of evidence this offer rests on — the application's own
+     * statistic, or something the person said — and the exact sentence that
+     * explains it.
+     *
+     * An unreadable proposal falls back to `user_stated_absence`, which is
+     * the STRICTER of the two treatments under the gate below: it must have
+     * been raised in this sitting. A row this deploy cannot read is a row it
+     * cannot justify interrupting with.
      */
     const proposal = readProposal(opportunity.proposal);
-    const preamble = proposal === null ? null : buildCadencePreamble(proposal);
-    const isCadenceOnly = proposal !== null && proposal.observation.kind === "no_mention_since";
+    const observationKind = proposal?.observation.kind ?? "user_stated_absence";
+    const preamble =
+      proposal === null
+        ? null
+        : observationKind === "self_reported_wellbeing"
+          ? // Not an explanation of a statistic — a reminder of whose words
+            // these are. See core/wellbeing/offer.ts.
+            buildWellbeingPreamble()
+          : buildCadencePreamble(proposal);
 
     if (opportunity.status === "offered") {
       // Re-presenting is recovery, not interruption: this person was already
@@ -214,6 +265,7 @@ export async function prepareOffer(
         !needsRepresenting(input.recentMessages, {
           renderedText: opportunity.renderedText,
           offeredAt: opportunity.offeredAt,
+          sittingStartedAtMs: sitting.startedAtMs,
         })
       ) {
         return { outcome: "none" };
@@ -222,42 +274,90 @@ export async function prepareOffer(
         outcome: "represented",
         opportunityId: opportunity.id,
         entityId: opportunity.entityId,
-        entityName,
+        entityName: entity.displayName,
         renderedText: opportunity.renderedText,
-        block: buildOfferBlock({ entityName, renderedText: opportunity.renderedText }),
+        block: buildOfferBlock({
+          entityName: entity.displayName,
+          renderedText: opportunity.renderedText,
+        }),
         preamble,
       };
     }
 
     /**
-     * PACING, not suppression, and BEFORE the transition.
+     * DOES THIS TURN STILL SUPPORT THIS OFFER? (M12e)
      *
-     * A cadence-only offer is the application raising a family matter the
-     * person did not bring up. Doing that on the second thing they have ever
-     * said made correct detection feel arbitrary. So it waits — and it waits
-     * without spending the opportunity: no `markOffered`, no `offered_at`, no
-     * 7-day cooldown started, nothing for the person to have declined. The
-     * row stays `drafted` and the next qualifying turn inside its existing
-     * window shows it.
+     * Asked BEFORE the transition, and a "no" spends nothing: no
+     * `markOffered`, no `offered_at`, no 7-day cooldown started, nothing for
+     * the person to have declined, and no second row. The opportunity stays
+     * `drafted` inside its existing window and the next turn that genuinely
+     * supports it shows it.
      *
-     * `continue` rather than `return`: pacing this candidate says nothing
-     * about the next one, and an explicit absence behind it is still the
-     * person's own words waiting to be answered.
+     * M12c asked only "is this conversation underway", and only of cadence
+     * offers. An explicit absence was exempt — correctly for the turn it is
+     * said on, and wrongly for the fourteen days the absence detector keeps
+     * re-examining the event. That is how "It was good, what about you?"
+     * ended up carrying somebody's family matter. See
+     * core/detection/presentation.ts for the whole rule.
+     *
+     * `continue` rather than `return`: withholding this candidate says
+     * nothing about the next one.
      */
-    if (isCadenceOnly) {
-      const verdict = cadenceMayBePresented(input.recentMessages, config);
-      if (!verdict.present) {
-        logEvent({
-          event: "consent.offer_paced",
-          opportunityId: opportunity.id,
-          reason: verdict.reason,
-          userTurns: verdict.userTurns,
-          userCharacters: verdict.userCharacters,
-          needTurns: verdict.needTurns,
-          needCharacters: verdict.needCharacters,
-        });
-        continue;
-      }
+    /**
+     * WHEN the person said it, and whether anything has overtaken it.
+     *
+     * `statedAt` is the source turn's `reported_at`, carried on the stored
+     * proposal since M12e.1. A row written before that falls back to the
+     * opportunity's `created_at` — the sweep that ingested the assertion,
+     * and the closest honest substitute for the turn itself.
+     */
+    const absence =
+      proposal !== null && proposal.observation.kind === "user_stated_absence"
+        ? proposal.observation
+        : null;
+    const raisedAtIso = absence?.statedAt ?? opportunity.createdAt;
+
+    let superseded = false;
+    if (absence !== null) {
+      const latest = await deps.interactionEvents.latestPositiveSince({
+        userId: input.userId,
+        entityId: opportunity.entityId,
+        sinceOccurredIso: absence.window.start,
+      });
+      superseded = absenceIsSuperseded({
+        statedAtIso: raisedAtIso,
+        windowStartIso: absence.window.start,
+        latestPositive:
+          latest === null
+            ? null
+            : { occurredAtIso: latest.occurredAt, reportedAtIso: latest.reportedAt },
+      });
+    }
+
+    const verdict = mayPresentOpportunity(
+      input.recentMessages,
+      {
+        kind: observationKind,
+        entityName: entity.displayName,
+        aliases: entity.aliases,
+        raisedAtIso,
+        offeredAtIso: opportunity.offeredAt,
+        supersededByLaterContact: superseded,
+      },
+      config,
+    );
+    if (!verdict.present) {
+      logEvent({
+        event: "consent.offer_withheld",
+        opportunityId: opportunity.id,
+        entityId: opportunity.entityId,
+        reason: verdict.reason,
+        userTurns: verdict.userTurns,
+        userCharacters: verdict.userCharacters,
+        needTurns: verdict.needTurns,
+        needCharacters: verdict.needCharacters,
+      });
+      continue;
     }
 
     const offered = await deps.opportunities.markOffered({
@@ -271,15 +371,19 @@ export async function prepareOffer(
       opportunityId: offered.id,
       entityId: offered.entityId,
       renderedTextHash: offered.renderedTextHash,
+      reason: verdict.reason,
     });
 
     return {
       outcome: "offered",
       opportunityId: offered.id,
       entityId: offered.entityId,
-      entityName,
+      entityName: entity.displayName,
       renderedText: opportunity.renderedText,
-      block: buildOfferBlock({ entityName, renderedText: opportunity.renderedText }),
+      block: buildOfferBlock({
+        entityName: entity.displayName,
+        renderedText: opportunity.renderedText,
+      }),
       preamble,
     };
   }
@@ -352,8 +456,8 @@ export async function handleConsentReply(
   }
 
   const entityName =
-    (await entityNameFor(deps, { userId: input.userId, entityId: opportunity.entityId })) ??
-    "them";
+    (await entityLabelFor(deps, { userId: input.userId, entityId: opportunity.entityId }))
+      ?.displayName ?? "them";
 
   logEvent({
     event: "consent.reply_read",

@@ -21,6 +21,7 @@ function entity(id: string, name: string): EntityRecord {
     displayName: name,
     aliases: [],
     status: "active",
+    origin: "user" as const,
     lastMentionedAt: null,
   };
 }
@@ -34,6 +35,10 @@ function deps(options: {
 }): BaselineDebugDeps {
   return {
     entities: {
+      async listPresentableForUser(userId: string, limit: number) {
+      const all = await this.listForUser(userId, limit);
+      return all.filter((row) => row.origin !== "dev");
+    },
       async listForUser() {
         return options.entities;
       },
@@ -76,7 +81,10 @@ function deps(options: {
     },
     clock: fixedClock(NOW),
     interactionEvents: {
-      async listRecentPositive() {
+      async latestPositiveSince() {
+      return null;
+    },
+    async listRecentPositive() {
         // Not a concern here: the proactive opening is tested on its own.
         return [];
       },

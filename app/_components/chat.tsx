@@ -92,8 +92,12 @@ export function Chat(props: {
   initialPendingOffer?: PendingOffer | null;
   displayName?: string | null;
   /** Development-only affordances. Never rendered in production. */
+  /**
+   * The one control the PRODUCT offers here: a public-demo visitor
+   * restarting their own demo. Developer controls moved to `/dev` in
+   * M12e.3 and are never passed in.
+   */
   devTools?: React.ReactNode;
-  demoHint?: React.ReactNode;
   /**
    * M12d: one bounded proactive opening, decided on the server from an
    * event the person themselves reported. `null` whenever there is nothing
@@ -915,7 +919,6 @@ export function Chat(props: {
             <p className="text-[1.05rem] text-[var(--color-muted)]">
               Say hello whenever you&rsquo;re ready.
             </p>
-            {props.demoHint}
           </div>
         )}
 
@@ -1030,6 +1033,40 @@ export function Chat(props: {
         <label htmlFor="chat-input" className="sr-only">
           Write a message to CareLoop
         </label>
+
+        {/*
+          WHERE THESE WORDS CAME FROM (M12e).
+
+          The voice pipeline works, and that is exactly the problem on video:
+          the transcript lands in the same composer a typed message lands in,
+          so a reviewer watching the recording cannot tell speech from typing.
+          Nothing about the flow is wrong; it is simply invisible.
+
+          One line, shown only when the text in the box was produced by
+          speech-to-text, and gone the moment the box is empty — `send`,
+          Clear and a manual delete all resolve `draftFromVoice` through the
+          same derivation (see `composerHasText` above), so there is no
+          second piece of state to fall out of step.
+
+          It survives EDITING on purpose: correcting a word the transcriber
+          misheard does not make the message typed, and a label that
+          vanished mid-correction would be lying in the other direction.
+
+          It says "ready to send", never "sending": explicit Send is the
+          whole point of showing the transcript, and a caption implying
+          otherwise would undo it.
+        */}
+        {draftFromVoice && composerHasText && (
+          <p
+            data-voice-origin
+            aria-live="polite"
+            className="flex items-center gap-1.5 pb-1.5 pl-1 text-[0.9rem] text-[var(--color-muted)]"
+          >
+            <MicIcon />
+            Voice transcript — check it, then press Send
+          </p>
+        )}
+
         {/*
           ONE shell, not three controls that happen to sit on the same line.
           The border, the background and the focus ring belong to this div;
